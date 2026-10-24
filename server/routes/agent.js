@@ -5,13 +5,14 @@ const agentService = require('../agentService');
 // Interactive Agent Chat
 router.post('/chat', async (req, res) => {
   try {
-    const { query, sessionId, workspace, role } = req.body;
+    const { query, history, sessionId, workspace, role } = req.body;
     if (!query) {
       return res.status(400).json({ success: false, error: 'Query is required' });
     }
 
     const result = await agentService.processQuery({
       query,
+      history: history || [],
       sessionId: sessionId || 'session-' + Date.now(),
       workspace: workspace || 'auth-service',
       role: role || 'developer'

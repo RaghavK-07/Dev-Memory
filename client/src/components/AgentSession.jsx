@@ -48,11 +48,21 @@ I work like a standard coding assistant, but with **persistent memory in MongoDB
     setIsSubmitting(true);
 
     try {
+      // Pass previous conversational turns as temporary working memory
+      const history = messages
+        .filter(m => !m.isError && m.id !== 'welcome')
+        .slice(-10)
+        .map(m => ({
+          role: m.sender === 'user' ? 'user' : 'model',
+          text: m.text
+        }));
+
       const response = await fetch('/api/agent/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           query,
+          history,
           sessionId: 'session-live',
           workspace,
           role: 'developer'
