@@ -87,8 +87,19 @@ export default function Navbar({
 
             {/* MongoDB Atlas Status */}
             <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200 text-[11px] font-mono text-slate-600">
-              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-              <span>Atlas Connected</span>
+              {health?.status === 'connected' ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                  <span>Atlas Connected</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                  <span title="Add current IP (157.51.39.48) or 0.0.0.0/0 to Atlas Network Access">
+                    Atlas: Whitelist IP (157.51.39.48)
+                  </span>
+                </>
+              )}
             </div>
           </div>
 
