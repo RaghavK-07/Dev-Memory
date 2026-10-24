@@ -1,19 +1,53 @@
 /**
  * Agent Reasoning & Memory Orchestration Service
- * Connects developer requests to MongoDB Vector Search, determines behavioral changes,
- * prevents repeated mistakes, handles conflict superseding, and tracks recalls.
+ * Provides natural AI coding assistance while perpetually checking and updating MongoDB memory.
+ * Whenever a past bug, failure, or constraint is relevant, the agent automatically rectifies it.
+ * Also automatically captures new learnings when the user shares constraints or post-mortems.
  */
 
 const memoryRepo = require('./memoryModel');
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
 class AgentService {
   /**
-   * Process a developer query in a given session
+   * Process a natural developer query
    */
   async processQuery({ query, sessionId, workspace = 'auth-service', role = 'developer' }) {
     const timestamp = new Date();
+    const queryLower = query.toLowerCase().trim();
 
-    // 1. Semantic Recall via MongoDB Vector Search
+    // 1. Detect if the user is explicitly teaching the AI something to remember
+    const autoLearn = this.detectLearningIntent(query, workspace);
+    let newlyLearnedMemory = null;
+
+    if (autoLearn) {
+      newlyLearnedMemory = await memoryRepo.createMemory({
+        owner: role,
+        workspace,
+        type: autoLearn.type,
+        content: {
+          title: autoLearn.title,
+          problem: autoLearn.problem,
+          attemptedFix: autoLearn.attemptedFix || '',
+          outcome: autoLearn.outcome || '',
+          recommendation: autoLearn.recommendation,
+          codeSnippet: autoLearn.codeSnippet || ''
+        },
+        source: {
+          sessionId,
+          channel: 'conversational_learning',
+          author: role
+        },
+        lifecycle: {
+          status: 'active',
+          confidence: 1.0,
+          tags: autoLearn.tags || ['learned-in-chat']
+        }
+      });
+    }
+
+    // 2. Query MongoDB Vector Search for relevant memories in this workspace
     const recalledMemories = await memoryRepo.vectorSearch({
       query,
       workspace,
@@ -22,88 +56,49 @@ class AgentService {
       minScore: 0.45
     });
 
-    // 2. Track recalls in MongoDB
+    // 3. Record recall events in MongoDB telemetry
     for (const mem of recalledMemories) {
       await memoryRepo.recordRecall(mem._id, sessionId, query, mem.relevanceScore);
     }
 
-    // 3. Inspect recalled memories to determine behavioral modifications
-    const failedFixes = recalledMemories.filter(m => m.type === 'failed_fix');
-    const constraints = recalledMemories.filter(m => m.type === 'constraint');
-    const conventions = recalledMemories.filter(m => m.type === 'convention');
-    const architectures = recalledMemories.filter(m => m.type === 'architecture');
-
-    // 4. Synthesize Agent Response with Visible Memory Citations
+    // 4. Generate intelligent response with automatic rectification
     let agentResponse = '';
-    let behaviorChangeNotice = null;
+    let autoRectification = null;
 
-    const queryLower = query.toLowerCase();
+    // Check if external LLM API keys are set (Gemini or OpenAI)
+    const geminiKey = process.env.GEMINI_API_KEY;
+    const openaiKey = process.env.OPENAI_API_KEY;
 
-    if (failedFixes.length > 0 && (queryLower.includes('token') || queryLower.includes('jwt') || queryLower.includes('expir') || queryLower.includes('fix') || queryLower.includes('auth'))) {
-      const primaryFail = failedFixes[0];
-      
-      behaviorChangeNotice = {
-        type: 'PREVENTED_FAILED_FIX',
-        memoryId: primaryFail._id,
-        title: primaryFail.content.title,
-        attempted: primaryFail.content.attemptedFix,
-        outcome: primaryFail.content.outcome,
-        score: primaryFail.relevanceScore,
-        workspace: primaryFail.workspace
-      };
-
-      agentResponse = `### Known Failure Invariant Detected
-
-Recalled memory \`#${primaryFail._id.toString().slice(-6)}\` in \`${primaryFail.workspace}\` (${(primaryFail.relevanceScore * 100).toFixed(1)}% match).
-
-**Prior Failed Approach:**
-${primaryFail.content.attemptedFix}
-
-**Failure Reason:**
-${primaryFail.content.outcome}
-
----
-
-### Verified Architecture:
-${primaryFail.content.recommendation}
-
-${primaryFail.content.codeSnippet ? `\`\`\`typescript\n${primaryFail.content.codeSnippet}\n\`\`\`` : ''}
-
-**Constraint:** Do not allow client-side timestamp extensions. Enforce server-managed session rotation.`;
-
-    } else if (constraints.length > 0) {
-      const topConstraint = constraints[0];
-
-      behaviorChangeNotice = {
-        type: 'ENFORCED_CONSTRAINT',
-        memoryId: topConstraint._id,
-        title: topConstraint.content.title,
-        recommendation: topConstraint.content.recommendation,
-        score: topConstraint.relevanceScore
-      };
-
-      agentResponse = `### Project Constraint Enforced: ${topConstraint.content.title}
-
-Recalled active constraint \`#${topConstraint._id.toString().slice(-6)}\` (${(topConstraint.relevanceScore * 100).toFixed(1)}% match):
-
-> ${topConstraint.content.recommendation}
-
-${topConstraint.content.codeSnippet ? `\`\`\`typescript\n${topConstraint.content.codeSnippet}\n\`\`\`` : ''}
-
-This workspace mandates compliance with this invariant.`;
-
+    if (geminiKey) {
+      try {
+        agentResponse = await this.callGemini(query, workspace, recalledMemories, newlyLearnedMemory);
+      } catch (err) {
+        console.warn('[Agent] Gemini API failed, using native code engine:', err.message);
+        agentResponse = this.generateNativeResponse(query, workspace, recalledMemories, newlyLearnedMemory);
+      }
+    } else if (openaiKey) {
+      try {
+        agentResponse = await this.callOpenAI(query, workspace, recalledMemories, newlyLearnedMemory);
+      } catch (err) {
+        console.warn('[Agent] OpenAI API failed, using native code engine:', err.message);
+        agentResponse = this.generateNativeResponse(query, workspace, recalledMemories, newlyLearnedMemory);
+      }
     } else {
-      // General response when no specific constraint/failed_fix triggers
-      agentResponse = `### Analysis for \`${workspace}\`
+      // Native high-capability coding & rectification engine
+      agentResponse = this.generateNativeResponse(query, workspace, recalledMemories, newlyLearnedMemory);
+    }
 
-No prior failures or active constraints matched this query.
-
-**Recommendation for:** "${query}"
-- Follow modular service boundaries.
-- Ensure all async handlers handle uncaught rejections.
-- Maintain idempotency and audit logs for sensitive operations.
-
-*Note: If an implementation fails tests or review, use "Record Bug / Rule" to persist the outcome into MongoDB.*`;
+    // Identify if a memory directly altered or rectified this response
+    if (recalledMemories.length > 0) {
+      const topMemory = recalledMemories[0];
+      autoRectification = {
+        memoryId: topMemory._id,
+        type: topMemory.type,
+        title: topMemory.content.title,
+        rectification: topMemory.content.recommendation,
+        score: topMemory.relevanceScore,
+        workspace: topMemory.workspace
+      };
     }
 
     return {
@@ -112,183 +107,299 @@ No prior failures or active constraints matched this query.
       query,
       timestamp,
       response: agentResponse,
-      behaviorChangeNotice,
+      autoRectification,
+      newlyLearnedMemory,
       recalledMemories: recalledMemories.map(m => ({
         id: m._id,
         type: m.type,
         title: m.content.title,
         relevanceScore: m.relevanceScore,
-        retrievalMethod: m.retrievalMethod,
-        attemptedFix: m.content.attemptedFix,
-        outcome: m.content.outcome,
         recommendation: m.content.recommendation,
         status: m.lifecycle.status,
-        supersededBy: m.lifecycle.supersededBy,
         recallsCount: (m.recallStats?.recallsCount || 0) + 1
       }))
     };
   }
 
   /**
-   * Simulate Act 1: The Costly Mistake
-   * Demonstrates an attempted fix that fails tests, prompting DevMemory to record a failed_fix memory
+   * Automatically detect if the user's prompt is conveying an invariant or bug to remember
    */
-  async simulateMistake({ workspace = 'auth-service', sessionId = 'session-act-1' }) {
-    const memoryData = {
-      owner: 'agent-devmemory',
-      workspace: workspace,
-      type: 'failed_fix',
-      content: {
-        title: 'Client-side JWT re-signing causes replay attack & test failures',
-        problem: 'Users frequently face sudden 401 Unauthorized errors when JWT access tokens expire after 15 minutes during active usage.',
-        attemptedFix: 'Allow client middleware to re-sign and extend token expiry timestamp on outgoing requests.',
-        outcome: 'Security audit test failure: Replay attack vulnerability! In addition, clock skew between client and server caused 403 Forbidden token signature mismatch.',
-        recommendation: 'Implement server-managed Sliding Session with Rotating Refresh Tokens stored in HttpOnly Secure SameSite cookies. The client never touches token signatures.',
-        codeSnippet: `// ❌ FAILED FIX ATTEMPT (DO NOT USE):
-// client.interceptors.request.use((req) => {
-//   token.exp = Date.now() + 3600; // Client-side manipulation!
-//   return req;
-// });
+  detectLearningIntent(query, workspace) {
+    const q = query.trim();
+    const lower = q.toLowerCase();
 
-//  CORRECT VERIFIED PATTERN:
-app.post('/api/auth/refresh', async (req, res) => {
-  const refreshToken = req.cookies.refreshToken;
-  const session = await verifyAndRotateRefreshToken(refreshToken);
-  res.cookie('refreshToken', session.newRefreshToken, { httpOnly: true, secure: true });
-  res.json({ accessToken: session.newAccessToken });
-});`,
-        affectedFiles: ['src/middleware/auth.ts', 'src/services/tokenService.ts', 'tests/auth.test.ts']
-      },
-      source: {
-        sessionId: sessionId,
-        channel: 'ci_pipeline_failure',
-        author: 'Security Regression Suite'
-      },
-      lifecycle: {
-        status: 'active',
-        confidence: 0.98,
-        tags: ['auth', 'jwt', 'security', 'token-expiry', 'replay-attack']
-      }
-    };
+    // Check for explicit memory triggers
+    const triggerMatch = lower.match(/(?:remember that|note that|keep in mind that|new rule:|from now on,|never use|always use|we changed|we migrated to|bug fix:)\s*(.*)/i);
+    
+    if (triggerMatch && triggerMatch[1]) {
+      const ruleText = triggerMatch[1].trim();
+      const isNegative = lower.includes('never') || lower.includes("don't") || lower.includes('failed') || lower.includes('bug');
 
-    const created = await memoryRepo.createMemory(memoryData);
-    return {
-      success: true,
-      action: 'MISTAKE_RECORDED',
-      message: 'Failed fix captured and stored in MongoDB Atlas memories collection!',
-      memory: created
-    };
-  }
-
-  /**
-   * Simulate Act 4: Constraint Correction & Conflict Resolution
-   * Demonstrates superseding an old memory when architecture shifts
-   */
-  async simulateCorrection({
-    oldMemoryTitle = 'Client-side JWT',
-    newConstraint = 'Migrated to Redis Distributed Session Store. Stateless JWT refresh tokens are deprecated; use Redis sliding session TTL.'
-  }) {
-    // 1. Locate the existing active memory to supersede
-    const existing = await memoryRepo.listMemories({
-      workspace: 'auth-service',
-      status: 'active'
-    });
-
-    const targetMemory = existing.find(m => 
-      m.content.title.toLowerCase().includes('jwt') || 
-      m.content.title.toLowerCase().includes('client-side')
-    ) || existing[0];
-
-    if (!targetMemory) {
-      throw new Error('No active memory found to supersede. Run the mistake simulation first.');
+      return {
+        type: isNegative ? 'failed_fix' : 'constraint',
+        title: ruleText.length > 60 ? ruleText.slice(0, 57) + '...' : ruleText,
+        problem: `Developer specified rule for ${workspace}: "${q}"`,
+        attemptedFix: isNegative ? q : '',
+        outcome: isNegative ? 'Flagged as anti-pattern by developer' : 'Approved invariant',
+        recommendation: ruleText,
+        tags: ['conversational-learning', workspace]
+      };
     }
 
-    // 2. Prepare new constraint memory
-    const newMemoryData = {
-      owner: 'tech-lead-alex',
-      workspace: targetMemory.workspace,
-      type: 'constraint',
-      content: {
-        title: 'Architecture Invariant: Redis Session Store with Sliding TTL',
-        problem: 'Stateless JWT refresh token complexity replaced by centralized Redis session store.',
-        attemptedFix: 'Replaced stateless JWT rotation with server-side Redis session ID store.',
-        outcome: 'Single point of revocation achieved; instant session invalidation and zero clock-skew bugs.',
-        recommendation: newConstraint,
-        codeSnippet: `//  NEW MANDATED CONSTRAINT:
-const session = await redisClient.get(\`session:\${sessionId}\`);
-if (!session) throw new UnauthorizedException('Session expired');
-// Slide session expiry by 30 mins on active traffic
-await redisClient.expire(\`session:\${sessionId}\`, 1800);`,
-        affectedFiles: ['src/config/redis.ts', 'src/middleware/session.ts']
-      },
-      source: {
-        sessionId: 'session-arch-decision',
-        channel: 'architecture_decision_record',
-        author: 'Lead Architect'
-      },
-      lifecycle: {
-        status: 'active',
-        confidence: 1.0,
-        tags: ['architecture', 'redis', 'session', 'sliding-ttl', 'constraint']
-      }
-    };
+    // Check for "X failed because Y" pattern
+    const failMatch = lower.match(/(.+)\s+(?:failed|broke|threw an error|crashed)\s+(?:because|with|due to)\s+(.+)/i);
+    if (failMatch) {
+      return {
+        type: 'failed_fix',
+        title: `Fix failure: ${failMatch[1].slice(0, 40).trim()}`,
+        problem: failMatch[1].trim(),
+        attemptedFix: failMatch[1].trim(),
+        outcome: failMatch[2].trim(),
+        recommendation: `Avoid ${failMatch[1].trim()}; resolve root cause: ${failMatch[2].trim()}`,
+        tags: ['failed-fix', 'bug-postmortem', workspace]
+      };
+    }
 
-    // 3. Supersede in MongoDB
-    const result = await memoryRepo.supersedeMemory(
-      targetMemory._id,
-      newMemoryData,
-      'Architectural shift: Stateless JWT replaced by Redis centralized session store'
-    );
-
-    return {
-      success: true,
-      action: 'MEMORY_SUPERSEDED',
-      supersededMemoryId: targetMemory._id,
-      newMemoryId: result.newMemory._id,
-      reason: result.reason,
-      newMemory: result.newMemory
-    };
+    return null;
   }
 
   /**
-   * Simulate Act 4: TTL Expiry
-   * Creates an ephemeral memory with a 30s TTL
+   * Native high-capability coding engine with automatic invariant rectification
    */
-  async simulateEphemeral({ workspace = 'auth-service', ttlSeconds = 30 }) {
-    const data = {
-      owner: 'debug-agent-probe',
-      workspace,
-      type: 'decision',
-      content: {
-        title: `Ephemeral Debug Flag: Trial Profiler Tracer [Expires in ${ttlSeconds}s]`,
-        problem: 'Temporary tracing enabled for diagnosing high latency in token verification.',
-        attemptedFix: 'Enable verbose packet inspection on port 8080.',
-        outcome: 'Diagnostic trace captured.',
-        recommendation: `This memory is time-limited (${ttlSeconds}s). MongoDB TTL index will automatically purge it once expired.`,
-        codeSnippet: `// Ephemeral flag automatically removed by MongoDB TTL:
-console.time('token-verify-latency');`,
-        affectedFiles: ['src/debug/profiler.ts']
-      },
-      source: {
-        sessionId: 'session-debug-ephemeral',
-        channel: 'debug_profiler',
-        author: 'Profiler Diagnostic'
-      },
-      lifecycle: {
-        status: 'active',
-        confidence: 0.7,
-        tags: ['ephemeral', 'ttl-demo', 'debug']
-      }
-    };
+  generateNativeResponse(query, workspace, recalledMemories, newlyLearnedMemory) {
+    const qLower = query.toLowerCase();
 
-    const created = await memoryRepo.createEphemeralMemory(data, ttlSeconds);
-    return {
-      success: true,
-      action: 'EPHEMERAL_MEMORY_CREATED',
-      ttlSeconds,
-      expiresAt: created.lifecycle.expiresAt,
-      memory: created
-    };
+    // If a new memory was just learned from this message
+    if (newlyLearnedMemory) {
+      return `I have committed this to my memory for **\`${workspace}\`**:
+
+> **Recorded Rule:** "${newlyLearnedMemory.content.title}"
+> **Action:** Stored in MongoDB Atlas vector graph.
+
+Whenever you or another developer encounter this in **\`${workspace}\`**, I will automatically apply this invariant and prevent mistakes.`;
+    }
+
+    // Check if relevant memories were recalled to automatically rectify
+    if (recalledMemories.length > 0) {
+      const mem = recalledMemories[0];
+
+      // Auth / JWT Token Expiration query
+      if (qLower.includes('token') || qLower.includes('jwt') || qLower.includes('expir') || qLower.includes('401') || qLower.includes('auth')) {
+        return `I have checked our memory for **\`${workspace}\`** and automatically applied a known project invariant:
+
+> **Applied Rectification (Memory #${mem._id.toString().slice(-6)}):**
+> *${mem.content.recommendation}*
+> *(Avoided prior failure: ${mem.content.outcome || mem.content.problem})*
+
+Here is the robust, rectified implementation:
+
+\`\`\`typescript
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+
+// Correct Pattern: Server-managed rotating refresh token
+export async function authenticateToken(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) return res.status(401).json({ error: 'Access token required' });
+
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET!, (err, user) => {
+    if (err) {
+      // 401 triggers client to hit the server-side refresh endpoint
+      return res.status(401).json({ error: 'Token expired', code: 'TOKEN_EXPIRED' });
+    }
+    req.user = user;
+    next();
+  });
+}
+
+// Dedicated token rotation endpoint (server strictly controls issuance)
+export async function handleTokenRefresh(req: Request, res: Response) {
+  const refreshToken = req.cookies.refreshToken;
+  if (!refreshToken) return res.status(401).json({ error: 'Refresh token missing' });
+
+  try {
+    const session = await verifyAndRotateSession(refreshToken);
+    // Issue rotated refresh token in secure HttpOnly cookie
+    res.cookie('refreshToken', session.newRefreshToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'strict'
+    });
+    res.json({ accessToken: session.newAccessToken });
+  } catch (err) {
+    res.status(403).json({ error: 'Invalid refresh token session' });
+  }
+}
+\`\`\`
+
+**Why this rectifies the issue:**
+1. The client never attempts to self-sign or tamper with token timestamps, preventing signature mismatch and replay attacks.
+2. Short-lived access tokens (15m) paired with server-rotated refresh tokens allow instant session revocation without clock skew issues.`;
+      }
+
+      // Currency / Float math query
+      if (qLower.includes('currency') || qLower.includes('float') || qLower.includes('price') || qLower.includes('discount') || qLower.includes('stripe')) {
+        return `I reviewed our project memory for **\`${workspace}\`** and applied our financial math invariant:
+
+> **Applied Rectification (Memory #${mem._id.toString().slice(-6)}):**
+> *${mem.content.recommendation}*
+
+Here is the correct integer-based calculation pattern:
+
+\`\`\`typescript
+// Accurate financial computation in integer cents (avoid IEEE-754 float drift)
+export function calculateOrderCents(itemPriceCents: number, quantity: number, discountBps: number, taxRateBps: number): {
+  subtotalCents: number;
+  discountCents: number;
+  taxCents: number;
+  totalCents: number;
+} {
+  const subtotalCents = itemPriceCents * quantity;
+  
+  // Basis points division with proper rounding (10000 bps = 100%)
+  const discountCents = Math.round((subtotalCents * discountBps) / 10000);
+  const taxableSubtotal = Math.max(0, subtotalCents - discountCents);
+  const taxCents = Math.round((taxableSubtotal * taxRateBps) / 10000);
+  const totalCents = taxableSubtotal + taxCents;
+
+  return { subtotalCents, discountCents, taxCents, totalCents };
+}
+\`\`\`
+
+All currency values remain whole integers through payment capture, eliminating fractional penny rounding errors.`;
+      }
+
+      // Idempotency query
+      if (qLower.includes('idempot') || qLower.includes('retry') || qLower.includes('duplicate') || qLower.includes('webhook')) {
+        return `Applying mandated project invariant from memory for **\`${workspace}\`**:
+
+> **Applied Rectification (Memory #${mem._id.toString().slice(-6)}):**
+> *${mem.content.recommendation}*
+
+\`\`\`typescript
+import { Request, Response, NextFunction } from 'express';
+import { redisClient } from '../config/redis';
+
+export async function enforceIdempotency(req: Request, res: Response, next: NextFunction) {
+  const key = req.headers['idempotency-key'] as string;
+  if (!key) {
+    return res.status(400).json({ error: 'Idempotency-Key header is mandatory for this mutation' });
+  }
+
+  // Atomic lock with 24-hour expiration
+  const acquired = await redisClient.set(\`idemp:\${key}\`, 'IN_FLIGHT', 'NX', 'EX', 86400);
+  if (!acquired) {
+    return res.status(409).json({ error: 'Duplicate request detected or already processed' });
+  }
+
+  next();
+}
+\`\`\``;
+      }
+
+      // Generic memory citation
+      return `I reviewed our memory for **\`${workspace}\`** and matched rule: **${mem.content.title}** (${(mem.relevanceScore * 100).toFixed(1)}% relevance).
+
+**Enforced Pattern:**
+${mem.content.recommendation}
+
+${mem.content.codeSnippet ? `\`\`\`typescript\n${mem.content.codeSnippet}\n\`\`\`` : ''}
+
+Let me know if you would like me to adjust this to specific files in your repository.`;
+    }
+
+    // Normal AI assistant answer when no specific bug invariant is in memory
+    return `Here is a solution for your request:
+
+To implement this cleanly in **\`${workspace}\`**:
+1. Keep service boundaries decoupled and handle errors with structured error classes.
+2. Ensure asynchronous handlers return proper status codes and handle uncaught rejections.
+
+\`\`\`typescript
+// Standard implementation pattern
+export async function executeOperation(payload: unknown) {
+  try {
+    // Validate inputs
+    if (!payload) throw new Error('Missing required payload');
+    
+    // Process business logic
+    return { success: true, timestamp: Date.now() };
+  } catch (err: any) {
+    console.error('Operation failed:', err.message);
+    throw err;
+  }
+}
+\`\`\`
+
+*Note: If you run into any bug or constraint while testing, simply tell me (e.g. "Remember that...") or click "Record Bug / Rule" and I will never make the mistake again.*`;
+  }
+
+  /**
+   * Optional Gemini API integration
+   */
+  async callGemini(query, workspace, memories, newlyLearnedMemory) {
+    const memoryDirectives = memories.map(m => 
+      `- INVARIANT (${m.type}): "${m.content.title}". Rule to follow: ${m.content.recommendation}. Past failure to avoid: ${m.content.outcome || m.content.problem}`
+    ).join('\n');
+
+    const systemPrompt = `You are DevMemory, a professional senior software engineer and AI pair programmer.
+Current workspace: ${workspace}.
+
+CRITICAL INSTRUCTIONS:
+You have access to persistent memories stored in MongoDB Atlas for this repository.
+If any invariants below apply to the user's question, you MUST automatically rectify the code and adhere strictly to them:
+${memoryDirectives || 'No prior failures in memory for this topic yet.'}
+
+Provide a clean, direct, high-quality answer with working code. If you rectified code based on a memory, briefly state what was rectified at the top.`;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          { role: 'user', parts: [{ text: `${systemPrompt}\n\nUser Question: ${query}` }] }
+        ]
+      })
+    });
+
+    const data = await res.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || this.generateNativeResponse(query, workspace, memories, newlyLearnedMemory);
+  }
+
+  /**
+   * Optional OpenAI API integration
+   */
+  async callOpenAI(query, workspace, memories, newlyLearnedMemory) {
+    const memoryDirectives = memories.map(m => 
+      `- RULE (${m.type}): "${m.content.title}". Rule: ${m.content.recommendation}. Failure to avoid: ${m.content.outcome || m.content.problem}`
+    ).join('\n');
+
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `You are DevMemory, a senior AI pair programmer. Workspace: ${workspace}.
+Adhere strictly to project invariants from MongoDB memory:
+${memoryDirectives}`
+          },
+          { role: 'user', content: query }
+        ]
+      })
+    });
+
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || this.generateNativeResponse(query, workspace, memories, newlyLearnedMemory);
   }
 }
 
