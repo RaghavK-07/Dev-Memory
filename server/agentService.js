@@ -389,7 +389,27 @@ However, your prompt suggests:
     const q = query.trim();
     const lower = q.toLowerCase();
 
-    // 0. Explicit Memory Update / Modification: "update the rule to...", "change the memory to...", "override the rule with..."
+    // 0. User Correction of AI Mistake / Bug: "you made a mistake...", "that's wrong...", "your code has a bug...", "you forgot to..."
+    const mistakeRegex = /^(?:wait,?\s+|no,?\s+)?(?:you\s+(?:made|have)\s+(?:a\s+)?(?:mistake|bug|error)|that(?:'s|\s+is)\s+(?:a\s+)?(?:mistake|bug|error|wrong|incorrect|broken)|your\s+code\s+(?:has\s+a\s+bug|is\s+wrong|is\s+broken|fails|threw\s+an\s+error)|you\s+(?:forgot|missed|omitted)|there\s+is\s+a\s+bug\s+in\s+your\s+code|this\s+code\s+throws|that\s+(?:doesn't|does\s+not|didn't|did\s+not)\s+work|no,?\s+that(?:'s|\s+is)\s+wrong|wrong[,.:\s]+|incorrect[,.:\s]+)(?:[:\s,-]+)?(.*)/i;
+    const mistakeMatch = q.match(mistakeRegex);
+    if (mistakeMatch) {
+      const correctionDetail = (mistakeMatch[1] || q).trim();
+      const { coreRule, reason } = this.distillCoreDirective(correctionDetail);
+
+      return {
+        type: 'failed_fix',
+        title: this.formatTitle(coreRule ? `Avoid: ${coreRule}` : `Mistake: ${correctionDetail.slice(0, 35)}`),
+        problem: reason || `Bug in generated code: "${correctionDetail}"`,
+        attemptedFix: `Mistake in previous response: ${correctionDetail}`,
+        outcome: 'Marked as failed pattern by developer correction',
+        recommendation: coreRule || correctionDetail,
+        tags: ['mistake-avoided', 'bug-fix', 'developer-correction', workspace],
+        isMistake: true,
+        isOverride: true
+      };
+    }
+
+    // 1. Explicit Memory Update / Modification: "update the rule to...", "change the memory to...", "override the rule with..."
     const updateRegex = /^(?:please\s+)?(?:update|change|override|modify|replace)\s+(?:the\s+)?(?:rule|memory|invariant|standard|policy)?(?:\s*(?:to|with|by))?[:\s]+\s*(.*)/i;
     const updateMatch = q.match(updateRegex);
     if (updateMatch && updateMatch[1]) {
@@ -404,7 +424,7 @@ However, your prompt suggests:
       };
     }
 
-    // 1. Explicit triggers: "remember that...", "note that...", "rule:...", "from now on..."
+    // 2. Explicit triggers: "remember that...", "note that...", "rule:...", "from now on..."
     const triggerMatch = lower.match(/(?:remember\s+(?:that)?|keep\s+in\s+mind\s+(?:that)?|note\s+(?:that)?|from\s+now\s+on,?\s*|new\s+rule:?|rule:?|invariant:?)\s*(.*)/i);
     if (triggerMatch && triggerMatch[1]) {
       const { coreRule, reason } = this.distillCoreDirective(triggerMatch[1].trim());
@@ -421,7 +441,7 @@ However, your prompt suggests:
       };
     }
 
-    // 2. Prohibitions & Anti-patterns: "never use...", "don't use / do not use...", "avoid..."
+    // 3. Prohibitions & Anti-patterns: "never use...", "don't use / do not use...", "avoid..."
     const prohibitionMatch = lower.match(/(?:never|do\s+not|don't|avoid)\s+(?:use|allow|store|commit|return|pass|accept|execute|call|log|expose|send|put|keep|render)\s+(.*)/i);
     if (prohibitionMatch && prohibitionMatch[1]) {
       const { coreRule, reason } = this.distillCoreDirective(q);
@@ -433,6 +453,22 @@ However, your prompt suggests:
         outcome: 'Marked as insecure or prohibited pattern',
         recommendation: coreRule,
         tags: ['anti-pattern', 'constraint', workspace]
+      };
+    }
+
+    // 4. Developer preference: "you should use X instead of Y" or "why did you use X"
+    const shouldInsteadMatch = lower.match(/(?:you\s+should(?:n't|\s+not)?\s+use|instead\s+of\s+.*,\s*(?:you\s+should\s+)?use|why\s+did\s+you\s+use)\s+(.*)/i);
+    if (shouldInsteadMatch) {
+      const { coreRule, reason } = this.distillCoreDirective(q);
+      return {
+        type: 'failed_fix',
+        title: this.formatTitle(`Avoid: ${coreRule}`),
+        problem: reason || 'Developer corrected AI choice',
+        attemptedFix: q,
+        outcome: 'Marked as incorrect pattern by developer',
+        recommendation: coreRule,
+        tags: ['mistake-avoided', 'developer-correction', workspace],
+        isMistake: true
       };
     }
 
@@ -507,51 +543,80 @@ However, your prompt suggests:
   }
 
   /**
-   * Check if a conversational message might contain an invariant or bug fix to extract
+   * Check if a conversational message might contain an invariant or developer bug/mistake correction
    */
   couldBeMemoryCandidate(text) {
-    if (!text || text.length < 15) return false;
+    if (!text || text.length < 8) return false;
     const lower = text.toLowerCase();
-    if (/^(what|how|why|where|who|when|can you|could you|please explain|tell me)\b/i.test(lower)) {
+
+    // High priority check: Developer pointing out an AI mistake or bug
+    const mistakePhrases = [
+      'mistake', 'wrong', 'incorrect', 'error', 'bug', 'forgot', 'broke', 'broken',
+      'instead', 'fails', 'leaks', 'crashes', 'warning', 'bad', 'flaw', 'missed',
+      'issue', 'problem', 'correction', 'not working', "didn't work", "doesn't work",
+      'that is not', "that's not", 'you should', "you shouldn't", 'why did you',
+      'throws', 'supposed to be', 'not equal to'
+    ];
+    if (mistakePhrases.some(w => lower.includes(w))) {
+      return true;
+    }
+
+    if (/^(what|how|where|who|when|can you|could you|please explain|tell me)\b/i.test(lower)) {
       return false;
     }
+
     const indicatorWords = [
       'rule', 'never', 'always', 'must', 'should', "don't", 'fix', 'fixed', 
-      'bug', 'failed', 'crash', 'avoid', 'in our', 'for this', 'standard', 
-      'convention', 'timeout', 'token', 'security', 'schema', 'database', 
-      'redis', 'mongo', 'postgres', 'policy', 'enforce', 'require', 'decided', 'switched'
+      'avoid', 'in our', 'for this', 'standard', 'convention', 'timeout', 
+      'token', 'security', 'schema', 'database', 'redis', 'mongo', 'postgres', 
+      'policy', 'enforce', 'require', 'decided', 'switched', '0^0'
     ];
     return indicatorWords.some(w => lower.includes(w));
   }
 
   /**
-   * LLM-assisted zero-shot invariant extraction: Distills ONLY the essential technical invariant
+   * LLM-assisted zero-shot extraction: Captures AI mistakes, bugs, and invariants
    */
   async extractMemoryWithLLM(query, history = [], workspace) {
     if (!process.env.GEMINI_API_KEY) return null;
 
+    const lastAITurn = history && Array.isArray(history) 
+      ? (history.filter(h => h.role === 'model' || h.role === 'assistant').slice(-1)[0]?.text || '')
+      : '';
+
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
-    const prompt = `You are an expert compiler of long-term software architectural memory.
-Analyze if this developer chat message sets a permanent project rule, architectural constraint, coding convention, or bug post-mortem/fix to remember.
+    const prompt = `You are an expert compiler of long-term software engineering memory for DevMemory.
+Analyze if this developer chat message:
+1. Points out an AI MISTAKE, BUG, OR CORRECTION in previous code/advice.
+2. Establishes a permanent project rule, architectural constraint, or coding convention.
 
-Message: "${query}"
+Developer Message: "${query}"
+${lastAITurn ? `Context - Previous AI Code/Response: "${lastAITurn.slice(0, 400)}..."` : ''}
 
-CRITICAL INSTRUCTION - DISTILL ONLY THE IMPORTANT PART:
-Do NOT store the entire chat message, full prompt, conversational fillers ("Hey", "Yo", "Remember that", "From now on"), polite words, or verbose backstories.
-Extract ONLY the essential, actionable technical invariant.
+CRITICAL RULES FOR EXTRACTION:
+- HIGHEST PRIORITY - AI MISTAKES / BUGS: If the developer is correcting an error, bug, mistake, omission, or wrong assumption the AI made, return:
+{
+  "isMemory": true,
+  "type": "failed_fix",
+  "isMistake": true,
+  "title": "Avoid: [Crisp 4-6 word title of the mistake avoided]",
+  "problem": "[Specific error, bug, or failure reported by the developer]",
+  "attemptedFix": "[The mistake the AI made in the previous code/response]",
+  "recommendation": "[The exact mandatory rule and rectified code/behavior to follow so this mistake is NEVER repeated in any project]",
+  "tags": ["mistake-avoided", "bug-fix", "developer-correction"]
+}
 
-If it DOES describe an invariant, rule, constraint, or bug fix to remember, reply with a JSON object:
+- PROJECT INVARIANTS: If the developer is setting an architectural rule or constraint:
 {
   "isMemory": true,
   "type": "constraint",
-  "title": "Ultra-concise title (max 4-7 words, e.g. 'Database Query Timeout: 5000ms', 'JWT Storage: HttpOnly Cookies')",
-  "problem": "Brief 1-sentence context or root cause (under 15 words, e.g. 'Unindexed queries lock the database connection pool')",
-  "recommendation": "The exact, distilled rule to follow (1-2 crisp actionable sentences only)",
-  "tags": ["relevant-tag1", "relevant-tag2"]
+  "title": "Ultra-concise title (max 4-6 words)",
+  "problem": "Brief 1-sentence context",
+  "recommendation": "The exact distilled rule to follow (1-2 crisp sentences)",
+  "tags": ["relevant-tags"]
 }
-(Note: Use "type": "failed_fix" if it describes a past failure or anti-pattern to avoid).
 
-If it is just a normal question, general coding request, code review, or chit-chat, reply with:
+- GENERAL CHAT / NORMAL QUESTIONS: If it is just a normal question, coding request, review request, or chit-chat (not a rule and not a correction), return:
 { "isMemory": false }
 
 Output pure JSON only.`;
@@ -579,7 +644,10 @@ Output pure JSON only.`;
             type: parsed.type || 'constraint',
             title: parsed.title,
             problem: parsed.problem || 'Project constraint',
+            attemptedFix: parsed.attemptedFix || '',
+            outcome: parsed.failureCaused || parsed.outcome || '',
             recommendation: parsed.recommendation,
+            isMistake: parsed.isMistake || parsed.type === 'failed_fix',
             tags: Array.isArray(parsed.tags) ? parsed.tags : ['conversational-learning', workspace]
           };
         }
@@ -614,8 +682,21 @@ ${query}
 3. **Readability**: Formatted structure for clean maintainability.`;
     }
 
-    // 1. Newly learned memory confirmation
+    // 1. Newly learned memory confirmation (Mistake or Invariant)
     if (newlyLearnedMemory) {
+      if (newlyLearnedMemory.type === 'failed_fix' || newlyLearnedMemory.content?.attemptedFix || (newlyLearnedMemory.lifecycle?.tags || []).includes('mistake-avoided')) {
+        return `### ⚠️ Mistake Acknowledged & Stored in Long-Term Memory
+
+Thank you for catching that! I made a mistake in my previous response:
+> **Mistake Avoided:** *${newlyLearnedMemory.content.attemptedFix || newlyLearnedMemory.content.problem}*  
+> **Mandated Rectification:** *${newlyLearnedMemory.content.recommendation}*  
+> **Database:** Permanently indexed in **MongoDB Atlas** as a \`failed_fix\` invariant (#${newlyLearnedMemory._id ? newlyLearnedMemory._id.toString().slice(-6) : 'mem'}).
+
+I have committed this to memory across **all current and future projects** so I will never repeat this mistake again.
+
+${newlyLearnedMemory.content.codeSnippet ? `\`\`\`typescript\n${newlyLearnedMemory.content.codeSnippet}\n\`\`\`` : ''}`;
+      }
+
       return `I have ${wasMemoryUpdated ? 'updated the existing invariant in' : 'saved this invariant to'} our persistent memory in **MongoDB Atlas**:
 
 > **Rule:** "${newlyLearnedMemory.content.title}"
@@ -959,7 +1040,7 @@ You just automatically ${wasMemoryUpdated ? 'updated the existing invariant in' 
 - Title: "${newlyLearnedMemory.content.title}"
 - Type: ${newlyLearnedMemory.type}
 - Mandated Rule: "${newlyLearnedMemory.content.recommendation}"
-Acknowledge that this rule was ${wasMemoryUpdated ? 'updated in' : 'committed to'} MongoDB memory and explain that future code generations will strictly adhere to it.` : ''}
+${(newlyLearnedMemory.type === 'failed_fix' || newlyLearnedMemory.content?.attemptedFix) ? `The developer just pointed out a mistake or bug in previous code (${newlyLearnedMemory.content.attemptedFix || newlyLearnedMemory.content.problem}). Humbly acknowledge your mistake, explain that this error has been permanently recorded in MongoDB Atlas memory so you will NEVER repeat it in this or any future project, and immediately provide the corrected, bug-free implementation.` : `Acknowledge that this rule was ${wasMemoryUpdated ? 'updated in' : 'committed to'} MongoDB memory and explain that future code generations will strictly adhere to it.`}` : ''}
 
 3. SHORT-TERM WORKING MEMORY:
 Maintain full conversational context across prior prompt turns in this session.
