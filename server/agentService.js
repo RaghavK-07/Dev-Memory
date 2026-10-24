@@ -91,10 +91,10 @@ class AgentService {
         targetMemoryId: (memoryCandidate.isOverride && recalledMemories.length > 0) ? recalledMemories[0]._id : undefined,
         content: {
           title: memoryCandidate.title || 'Project Invariant',
-          problem: memoryCandidate.problem || `Constraint: "${queryTrimmed}"`,
+          problem: memoryCandidate.problem || 'Project constraint',
           attemptedFix: memoryCandidate.attemptedFix || '',
           outcome: memoryCandidate.outcome || '',
-          recommendation: memoryCandidate.recommendation || queryTrimmed,
+          recommendation: memoryCandidate.recommendation || memoryCandidate.title,
           codeSnippet: memoryCandidate.codeSnippet || ''
         },
         source: {
@@ -274,7 +274,111 @@ However, your prompt suggests:
   }
 
   /**
+   * Strip conversational filler, greetings, and chat packaging
+   */
+  stripConversationalFluff(text) {
+    if (!text) return '';
+    let clean = text.trim();
+
+    // 1. Strip leading greetings & conversational prefixes
+    clean = clean.replace(/^(?:hey|hi|hello|dude|yo|please|bro|okay|ok|so|also|look|well|listen)[\s,:]+/i, '');
+
+    // 2. Strip rule declarations & triggers
+    clean = clean.replace(/^(?:please\s+)?(?:update|change|override|modify|replace)\s+(?:the\s+)?(?:rule|memory|invariant|standard|policy)?(?:\s*(?:to|with|by))?[:\s]+/i, '');
+    clean = clean.replace(/^(?:remember\s+(?:that)?|keep\s+in\s+mind\s+(?:that)?|don't\s+forget\s+(?:that)?|note\s+(?:that)?|from\s+now\s+on,?\s*|make\s+sure\s+(?:that)?|ensure\s+(?:that)?|we\s+(?:decided|agreed)\s+(?:that)?|our\s+rule\s+is\s+(?:that)?|new\s+rule:?|rule:?|invariant:?)[\s,:]*/i, '');
+
+    // 3. Strip project scope mentions
+    clean = clean.replace(/^(?:in\s+(?:this|our)\s+.*?(?:project|workspace|service|codebase|app|repo|system|backend|frontend),?)\s*/i, '');
+
+    // 4. Strip trailing polite endings
+    clean = clean.replace(/[\s,]+(?:thanks|thank you|pls|please|got it|alright|cool)[\s.!]*$/i, '');
+
+    return clean.trim();
+  }
+
+  /**
+   * Distill ONLY the core directive and separate it from explanatory reasons
+   */
+  distillCoreDirective(text) {
+    const cleaned = this.stripConversationalFluff(text);
+    if (!cleaned) return { coreRule: text, reason: '' };
+
+    // Check if there is a reason/cause clause (e.g. "because ...", "due to ...", "so that ...", "as ...")
+    const reasonMatch = cleaned.match(/^(.+?)\s+(?:because|due to|so that|in order to|since|as it causes|to prevent|which prevents|which avoids)\s+(.+)$/i);
+
+    let coreRule = cleaned;
+    let reason = '';
+
+    if (reasonMatch && reasonMatch[1] && reasonMatch[2]) {
+      coreRule = reasonMatch[1].trim();
+      reason = reasonMatch[2].trim().replace(/[!?.]$/, '');
+    }
+
+    // Capitalize first letter
+    coreRule = coreRule.charAt(0).toUpperCase() + coreRule.slice(1);
+    if (reason) {
+      reason = reason.charAt(0).toUpperCase() + reason.slice(1);
+    }
+
+    return { coreRule, reason };
+  }
+
+  /**
+   * Format ultra-concise, professional title without prompt transcripts
+   */
+  formatTitle(text) {
+    if (!text) return 'Project Invariant';
+    const { coreRule } = this.distillCoreDirective(text);
+    const clean = coreRule.replace(/[!?,.]/g, '').trim();
+    const lower = clean.toLowerCase();
+
+    // 1. Database timeout
+    const timeoutMatch = lower.match(/(\d+\s*m?s)/i);
+    if (lower.includes('timeout') && timeoutMatch) {
+      return `Database Query Timeout (${timeoutMatch[1]})`;
+    }
+
+    // 2. JWT / Cookie / Storage
+    if (lower.includes('jwt') || lower.includes('token')) {
+      if (lower.includes('httponly') || lower.includes('cookie')) {
+        return 'JWT Storage: HttpOnly Cookies';
+      }
+      if (lower.includes('localstorage') || lower.includes('local storage')) {
+        return 'JWT Storage: LocalStorage';
+      }
+      return 'JWT Token Management Policy';
+    }
+
+    // 3. Password Hashing
+    if (lower.includes('password') || lower.includes('hash')) {
+      if (lower.includes('argon2')) return 'Password Hashing: Argon2id';
+      if (lower.includes('bcrypt')) return 'Password Hashing: Bcrypt';
+      return 'Password Security Standard';
+    }
+
+    // 4. Currency / Float math
+    if (lower.includes('currency') || lower.includes('price') || lower.includes('cent')) {
+      return 'Financial Math: Integer Cents';
+    }
+
+    // 5. General prohibition
+    if (lower.startsWith('never ') || lower.startsWith('do not ') || lower.startsWith("don't ") || lower.startsWith('avoid ')) {
+      const stripped = clean.replace(/^(?:never\s+|do\s+not\s+|don't\s+|avoid\s+)/i, '');
+      const cap = stripped.charAt(0).toUpperCase() + stripped.slice(1);
+      return cap.length > 42 ? `Prohibit: ${cap.slice(0, 39)}...` : `Prohibit: ${cap}`;
+    }
+
+    // General title: keep under 45 chars cleanly
+    const words = clean.split(/\s+/);
+    if (words.length <= 6 && clean.length <= 45) {
+      return clean.charAt(0).toUpperCase() + clean.slice(1);
+    }
+    return words.slice(0, 5).join(' ') + '...';
+  }
+
+  /**
    * Fast rule-based invariant & bug detection across conversational statements
+   * Discerning: ONLY extracts and stores the distilled core invariant!
    */
   detectLearningIntent(query, workspace) {
     const q = query.trim();
@@ -284,12 +388,12 @@ However, your prompt suggests:
     const updateRegex = /^(?:please\s+)?(?:update|change|override|modify|replace)\s+(?:the\s+)?(?:rule|memory|invariant|standard|policy)?(?:\s*(?:to|with|by))?[:\s]+\s*(.*)/i;
     const updateMatch = q.match(updateRegex);
     if (updateMatch && updateMatch[1]) {
-      const newRuleText = updateMatch[1].trim();
+      const { coreRule, reason } = this.distillCoreDirective(updateMatch[1].trim());
       return {
         type: 'constraint',
-        title: this.formatTitle(newRuleText),
-        problem: `Updated project rule: "${q}"`,
-        recommendation: newRuleText,
+        title: this.formatTitle(coreRule),
+        problem: reason ? `Updated standard: ${reason}` : 'Updated project standard',
+        recommendation: coreRule,
         tags: ['long-term-memory', 'updated-rule'],
         isOverride: true
       };
@@ -298,16 +402,16 @@ However, your prompt suggests:
     // 1. Explicit triggers: "remember that...", "note that...", "rule:...", "from now on..."
     const triggerMatch = lower.match(/(?:remember\s+(?:that)?|keep\s+in\s+mind\s+(?:that)?|note\s+(?:that)?|from\s+now\s+on,?\s*|new\s+rule:?|rule:?|invariant:?)\s*(.*)/i);
     if (triggerMatch && triggerMatch[1]) {
-      const ruleText = triggerMatch[1].trim();
+      const { coreRule, reason } = this.distillCoreDirective(triggerMatch[1].trim());
       const isNegative = lower.includes('never') || lower.includes("don't") || lower.includes('failed') || lower.includes('avoid');
 
       return {
         type: isNegative ? 'failed_fix' : 'constraint',
-        title: this.formatTitle(ruleText),
-        problem: `Project invariant in ${workspace}: "${q}"`,
-        attemptedFix: isNegative ? q : '',
-        outcome: isNegative ? 'Anti-pattern marked by developer' : 'Approved invariant',
-        recommendation: ruleText,
+        title: this.formatTitle(coreRule),
+        problem: reason || (isNegative ? 'Prohibited anti-pattern' : 'Project architectural standard'),
+        attemptedFix: isNegative ? coreRule : '',
+        outcome: isNegative ? 'Marked as insecure anti-pattern' : 'Approved invariant',
+        recommendation: coreRule,
         tags: ['conversational-learning', workspace]
       };
     }
@@ -315,13 +419,14 @@ However, your prompt suggests:
     // 2. Prohibitions & Anti-patterns: "never use...", "don't use / do not use...", "avoid..."
     const prohibitionMatch = lower.match(/(?:never|do\s+not|don't|avoid)\s+(?:use|allow|store|commit|return|pass|accept|execute|call|log|expose|send|put|keep|render)\s+(.*)/i);
     if (prohibitionMatch && prohibitionMatch[1]) {
+      const { coreRule, reason } = this.distillCoreDirective(q);
       return {
         type: 'failed_fix',
-        title: this.formatTitle(`Avoid ${prohibitionMatch[1].trim()}`),
-        problem: `Prohibited anti-pattern in ${workspace}: "${q}"`,
-        attemptedFix: q,
-        outcome: 'Marked as insecure or broken anti-pattern',
-        recommendation: `Do not ${prohibitionMatch[0].trim()}`,
+        title: this.formatTitle(coreRule),
+        problem: reason || 'Prohibited anti-pattern',
+        attemptedFix: coreRule,
+        outcome: 'Marked as insecure or prohibited pattern',
+        recommendation: coreRule,
         tags: ['anti-pattern', 'constraint', workspace]
       };
     }
@@ -329,12 +434,12 @@ However, your prompt suggests:
     // 3. Project scope statements: "In our auth service, all user passwords..."
     const scopeMatch = lower.match(/(?:in\s+(?:this|our)\s+.*?(?:project|workspace|service|codebase|app|repo|system|backend|frontend),?)\s*(.+)/i);
     if (scopeMatch && scopeMatch[1] && scopeMatch[1].length > 10) {
-      const statement = scopeMatch[1].trim();
+      const { coreRule, reason } = this.distillCoreDirective(scopeMatch[1].trim());
       return {
         type: 'constraint',
-        title: this.formatTitle(statement),
-        problem: `Architecture policy for ${workspace}: "${q}"`,
-        recommendation: q,
+        title: this.formatTitle(coreRule),
+        problem: reason || 'Architectural policy',
+        recommendation: coreRule,
         tags: ['architecture-decision', workspace]
       };
     }
@@ -342,11 +447,12 @@ However, your prompt suggests:
     // 4. Mandatory invariants: "all X must have...", "queries must use...", "passwords must be..."
     const mustMatch = lower.match(/(.+?)\s+must\s+(?:always\s+)?(?:be|have|use|implement|return|follow|contain|include|validate|enforce|run|match|check)\s+(.+)/i);
     if (mustMatch) {
+      const { coreRule, reason } = this.distillCoreDirective(q);
       return {
         type: 'constraint',
-        title: this.formatTitle(q),
-        problem: `Mandatory standard in ${workspace}: "${q}"`,
-        recommendation: q,
+        title: this.formatTitle(coreRule),
+        problem: reason || 'Mandatory coding standard',
+        recommendation: coreRule,
         tags: ['coding-standard', 'constraint', workspace]
       };
     }
@@ -354,11 +460,12 @@ However, your prompt suggests:
     // 5. Positive directives: "always use...", "ensure that...", "make sure that..."
     const alwaysMatch = lower.match(/(?:always|ensure\s+that|make\s+sure\s+that|require)\s+(.*)/i);
     if (alwaysMatch && alwaysMatch[1]) {
+      const { coreRule, reason } = this.distillCoreDirective(q);
       return {
         type: 'constraint',
-        title: this.formatTitle(q),
-        problem: `Mandatory standard in ${workspace}: "${q}"`,
-        recommendation: q,
+        title: this.formatTitle(coreRule),
+        problem: reason || 'Mandatory project standard',
+        recommendation: coreRule,
         tags: ['coding-standard', 'constraint', workspace]
       };
     }
@@ -368,11 +475,11 @@ However, your prompt suggests:
     if (fixMatch) {
       return {
         type: 'failed_fix',
-        title: this.formatTitle(`Bug fix: ${fixMatch[1].trim()}`),
+        title: this.formatTitle(`Fix: ${fixMatch[1].trim()}`),
         problem: fixMatch[1].trim(),
         attemptedFix: fixMatch[1].trim(),
         outcome: 'Resolved via verified fix',
-        recommendation: `Fix applied: ${fixMatch[2].trim()}`,
+        recommendation: `Apply fix: ${fixMatch[2].trim()}`,
         tags: ['bug-fix', 'postmortem', workspace]
       };
     }
@@ -382,7 +489,7 @@ However, your prompt suggests:
     if (failMatch) {
       return {
         type: 'failed_fix',
-        title: this.formatTitle(`Failure: ${failMatch[1].slice(0, 45).trim()}`),
+        title: this.formatTitle(`Failure: ${failMatch[1].slice(0, 35).trim()}`),
         problem: failMatch[1].trim(),
         attemptedFix: failMatch[1].trim(),
         outcome: failMatch[2].trim(),
@@ -392,13 +499,6 @@ However, your prompt suggests:
     }
 
     return null;
-  }
-
-  formatTitle(str) {
-    if (!str) return 'Project Invariant';
-    const clean = str.replace(/[!?,.]/g, '').trim();
-    const capitalized = clean.charAt(0).toUpperCase() + clean.slice(1);
-    return capitalized.length > 55 ? capitalized.slice(0, 52) + '...' : capitalized;
   }
 
   /**
@@ -420,28 +520,33 @@ However, your prompt suggests:
   }
 
   /**
-   * LLM-assisted zero-shot invariant extraction for natural conversational chats
+   * LLM-assisted zero-shot invariant extraction: Distills ONLY the essential technical invariant
    */
   async extractMemoryWithLLM(query, history = [], workspace) {
     if (!process.env.GEMINI_API_KEY) return null;
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
-    const prompt = `Analyze if this developer chat message sets a permanent project rule, architectural constraint, coding convention, or bug post-mortem/fix to remember for workspace "${workspace}".
+    const prompt = `You are an expert compiler of long-term software architectural memory.
+Analyze if this developer chat message sets a permanent project rule, architectural constraint, coding convention, or bug post-mortem/fix to remember.
 
 Message: "${query}"
 
-If it DOES describe a rule, constraint, convention, or bug fix to remember, reply with a JSON object:
+CRITICAL INSTRUCTION - DISTILL ONLY THE IMPORTANT PART:
+Do NOT store the entire chat message, full prompt, conversational fillers ("Hey", "Yo", "Remember that", "From now on"), polite words, or verbose backstories.
+Extract ONLY the essential, actionable technical invariant.
+
+If it DOES describe an invariant, rule, constraint, or bug fix to remember, reply with a JSON object:
 {
   "isMemory": true,
   "type": "constraint",
-  "title": "Concise title under 55 characters",
-  "problem": "Brief description of the context or problem",
-  "recommendation": "The exact rule or rectified solution to follow",
-  "tags": ["tag1", "tag2"]
+  "title": "Ultra-concise title (max 4-7 words, e.g. 'Database Query Timeout: 5000ms', 'JWT Storage: HttpOnly Cookies')",
+  "problem": "Brief 1-sentence context or root cause (under 15 words, e.g. 'Unindexed queries lock the database connection pool')",
+  "recommendation": "The exact, distilled rule to follow (1-2 crisp actionable sentences only)",
+  "tags": ["relevant-tag1", "relevant-tag2"]
 }
 (Note: Use "type": "failed_fix" if it describes a past failure or anti-pattern to avoid).
 
-If it is just a normal question, coding request, review request, or chit-chat, reply with:
+If it is just a normal question, general coding request, code review, or chit-chat, reply with:
 { "isMemory": false }
 
 Output pure JSON only.`;
@@ -468,7 +573,7 @@ Output pure JSON only.`;
           return {
             type: parsed.type || 'constraint',
             title: parsed.title,
-            problem: parsed.problem || `Constraint in ${workspace}`,
+            problem: parsed.problem || 'Project constraint',
             recommendation: parsed.recommendation,
             tags: Array.isArray(parsed.tags) ? parsed.tags : ['conversational-learning', workspace]
           };

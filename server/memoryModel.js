@@ -447,17 +447,13 @@ class MemoryRepository {
     if (targetMemory) {
       console.log(`[MemoryRepo] Found existing related memory (#${targetMemory._id.toString().slice(-6)} - "${targetMemory.content.title}"). Updating to prevent redundancy.`);
 
-      const isOverride = data.isOverride || (data.lifecycle?.tags || []).includes('updated-rule');
-      const updatedRecommendation = isOverride
-        ? data.content.recommendation
-        : (data.content?.recommendation && data.content.recommendation !== targetMemory.content.recommendation
-          ? `${targetMemory.content.recommendation} | Updated rule: ${data.content.recommendation}`
-          : targetMemory.content.recommendation);
+      // Update directly with the distilled invariant, avoiding string concatenation bloat
+      const updatedRecommendation = data.content?.recommendation || targetMemory.content.recommendation;
 
       const updated = await this.updateMemory(targetMemory._id, {
         content: {
-          title: isOverride && data.content?.title ? data.content.title : targetMemory.content.title,
-          problem: isOverride && data.content?.problem ? data.content.problem : targetMemory.content.problem,
+          title: data.content?.title || targetMemory.content.title,
+          problem: data.content?.problem || targetMemory.content.problem,
           recommendation: updatedRecommendation,
           codeSnippet: data.content?.codeSnippet || targetMemory.content.codeSnippet
         },
