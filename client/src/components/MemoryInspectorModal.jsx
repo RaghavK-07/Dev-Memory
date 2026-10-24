@@ -135,8 +135,8 @@ export default function MemoryInspectorModal({ memoryId, onClose, onRefresh }) {
                     <span className="text-xs font-semibold text-slate-800 uppercase font-mono">{memory.type}</span>
                   </div>
                   <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                    <span className="text-[10px] text-slate-400 font-medium block">Workspace</span>
-                    <span className="text-xs font-semibold text-slate-800 font-mono">{memory.workspace}</span>
+                    <span className="text-[10px] text-slate-400 font-medium block">Storage</span>
+                    <span className="text-xs font-semibold text-emerald-700 font-mono">MongoDB Atlas</span>
                   </div>
                   <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
                     <span className="text-[10px] text-slate-400 font-medium block">Status</span>

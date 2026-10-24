@@ -4,8 +4,6 @@ import { Terminal, Database, Plus, Search, Layers, MessageSquare, CheckCircle2, 
 export default function Navbar({
   activeTab,
   setActiveTab,
-  workspace,
-  setWorkspace,
   health,
   onOpenRecordModal,
   onOpenSettings
@@ -15,75 +13,59 @@ export default function Navbar({
       <div className="max-w-6xl mx-auto px-4 sm:px-6">
         <div className="flex items-center justify-between h-16">
           
-          {/* Logo & Workspace */}
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center text-white">
-                <Terminal className="w-4 h-4" />
-              </div>
-              <div>
-                <span className="font-semibold text-sm text-slate-900 tracking-tight">DevMemory</span>
-                <span className="ml-2 text-[11px] font-mono text-slate-500 hidden sm:inline">
-                  Persistent Agent Memory
-                </span>
-              </div>
+          {/* Logo */}
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center text-white shadow-sm">
+              <Terminal className="w-4 h-4" />
             </div>
-
-            {/* Workspace Selector */}
-            <div className="hidden md:flex items-center gap-1.5 pl-4 border-l border-slate-200">
-              <span className="text-xs font-medium text-slate-500">Workspace:</span>
-              <select
-                value={workspace}
-                onChange={(e) => setWorkspace(e.target.value)}
-                className="bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-md px-2.5 py-1 text-xs font-mono font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-slate-900 cursor-pointer transition"
-              >
-                <option value="auth-service">auth-service</option>
-                <option value="payment-gateway">payment-gateway</option>
-                <option value="checkout-api">checkout-api</option>
-              </select>
+            <div>
+              <span className="font-semibold text-sm text-slate-900 tracking-tight">DevMemory</span>
+              <span className="ml-2 text-[11px] font-mono text-slate-500 hidden sm:inline">
+                • Short-Term & Long-Term Memory
+              </span>
             </div>
           </div>
 
-          {/* Navigation Tabs */}
-          <nav className="flex items-center space-x-1">
+          {/* Just 2 Clean Navigation Tabs */}
+          <nav className="flex items-center space-x-1.5 bg-slate-100 p-1 rounded-lg border border-slate-200">
             <button
               onClick={() => setActiveTab('assistant')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition flex items-center gap-1.5 ${
+              className={`px-3.5 py-1.5 rounded-md text-xs font-medium transition flex items-center gap-1.5 ${
                 activeTab === 'assistant'
-                  ? 'bg-slate-100 text-slate-900 font-semibold'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  ? 'bg-white text-slate-900 font-semibold shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
               }`}
             >
-              <MessageSquare className="w-3.5 h-3.5" />
-              <span>Assistant</span>
+              <MessageSquare className="w-3.5 h-3.5 text-slate-700" />
+              <span>Chatbot</span>
             </button>
 
             <button
               onClick={() => setActiveTab('repository')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition flex items-center gap-1.5 ${
+              className={`px-3.5 py-1.5 rounded-md text-xs font-medium transition flex items-center gap-1.5 ${
                 activeTab === 'repository'
-                  ? 'bg-slate-100 text-slate-900 font-semibold'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  ? 'bg-white text-slate-900 font-semibold shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
               }`}
             >
-              <Layers className="w-3.5 h-3.5" />
-              <span>Learned Rules</span>
+              <Database className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Memory (MongoDB)</span>
               {health?.counts?.active !== undefined && (
-                <span className="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-slate-200 text-slate-700 font-mono">
+                <span className="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-emerald-100 text-emerald-800 font-mono font-medium">
                   {health.counts.active}
                 </span>
               )}
             </button>
           </nav>
 
-          {/* Right Action: Record Rule + Connection Pill */}
+          {/* Right Action: Record Memory + Settings */}
           <div className="flex items-center gap-2">
             <button
               onClick={onOpenRecordModal}
               className="px-3 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium transition flex items-center gap-1.5 shadow-sm"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Record Bug / Rule</span>
+              <span className="hidden sm:inline">Add Memory</span>
             </button>
 
             <button

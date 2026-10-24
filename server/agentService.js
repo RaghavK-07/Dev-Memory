@@ -13,13 +13,13 @@ class AgentService {
   /**
    * Process a natural developer query
    */
-  async processQuery({ query, history = [], sessionId, workspace = 'auth-service', role = 'developer' }) {
+  async processQuery({ query, history = [], sessionId, workspace = 'default', role = 'developer' }) {
     const timestamp = new Date();
     const queryTrimmed = (query || '').trim();
     const queryLower = queryTrimmed.toLowerCase();
     const isGreeting = this.isSimpleGreeting(queryLower);
 
-    // 1. Detect if the user is conveying an invariant, rule, decision, or bug to remember
+    // 1. Detect if the user explicitly conveyed an invariant, rule, decision, or bug to remember
     let autoLearn = !isGreeting ? this.detectLearningIntent(queryTrimmed, workspace) : null;
 
     // If rule-based didn't trigger, and LLM is enabled, check with smart LLM classifier
@@ -36,11 +36,11 @@ class AgentService {
     if (autoLearn) {
       newlyLearnedMemory = await memoryRepo.createMemory({
         owner: role,
-        workspace,
+        workspace: 'default',
         type: autoLearn.type || 'constraint',
         content: {
           title: autoLearn.title || 'Project Invariant',
-          problem: autoLearn.problem || `Project constraint in ${workspace}: "${queryTrimmed}"`,
+          problem: autoLearn.problem || `Constraint: "${queryTrimmed}"`,
           attemptedFix: autoLearn.attemptedFix || '',
           outcome: autoLearn.outcome || '',
           recommendation: autoLearn.recommendation || queryTrimmed,
@@ -54,22 +54,21 @@ class AgentService {
         lifecycle: {
           status: 'active',
           confidence: 1.0,
-          tags: autoLearn.tags || ['learned-in-chat', workspace]
+          tags: autoLearn.tags || ['long-term-memory']
         }
       });
     }
 
-    // 2. Query MongoDB Vector Search for relevant memories in this workspace
+    // 2. Query MongoDB Vector Search for relevant long-term memories
     // (Only query vector search if it's not a simple greeting)
     let recalledMemories = [];
 
-    if (!isGreeting && !newlyLearnedMemory) {
+    if (!isGreeting) {
       recalledMemories = await memoryRepo.vectorSearch({
         query: queryTrimmed,
-        workspace,
         status: 'active',
         limit: 3,
-        minScore: 0.48
+        minScore: 0.45
       });
 
       for (const mem of recalledMemories) {
@@ -77,7 +76,7 @@ class AgentService {
       }
     }
 
-    // 3. Generate response with multi-turn temporary working memory
+    // 3. Generate response with multi-turn short-term working memory
     let agentResponse = '';
     let autoRectification = null;
 
@@ -103,6 +102,16 @@ class AgentService {
       agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory);
     }
 
+    // 4. Long-Term Memory: Commit selected content to MongoDB on every chat interaction
+    if (!newlyLearnedMemory && !isGreeting && queryTrimmed.length > 5) {
+      newlyLearnedMemory = await this.distillAndStoreLongTermMemory({
+        query: queryTrimmed,
+        response: agentResponse,
+        sessionId,
+        role
+      });
+    }
+
     // Check if an invariant altered or rectified this response
     if (recalledMemories.length > 0) {
       const topMemory = recalledMemories[0];
@@ -111,14 +120,12 @@ class AgentService {
         type: topMemory.type,
         title: topMemory.content.title,
         rectification: topMemory.content.recommendation,
-        score: topMemory.relevanceScore,
-        workspace: topMemory.workspace
+        score: topMemory.relevanceScore
       };
     }
 
     return {
       sessionId,
-      workspace,
       query: queryTrimmed,
       timestamp,
       response: agentResponse,
@@ -134,6 +141,60 @@ class AgentService {
         recallsCount: (m.recallStats?.recallsCount || 0) + 1
       }))
     };
+  }
+
+  /**
+   * Distill and commit key insights from every chat interaction to MongoDB long-term memory
+   */
+  async distillAndStoreLongTermMemory({ query, response, sessionId, role = 'developer' }) {
+    try {
+      const q = query.trim();
+      const cleanResponse = (response || '')
+        .replace(/```[\s\S]*?```/g, '') // remove code blocks for distillation
+        .replace(/[#*`>]/g, '')
+        .trim();
+
+      const sentences = cleanResponse.split(/(?<=[.?!])\s+/).filter(s => s.length > 15);
+      const summary = sentences.slice(0, 2).join(' ').trim() || cleanResponse.slice(0, 160);
+
+      // Create a readable title
+      let title = q.replace(/[?!.]/g, '').trim();
+      title = title.replace(/^(write a|write an|how to|how do we|how should i|explain|what is|tell me about)\s+/i, '');
+      title = title.charAt(0).toUpperCase() + title.slice(1);
+      if (title.length > 50) {
+        title = title.slice(0, 47) + '...';
+      }
+
+      const doc = await memoryRepo.createMemory({
+        owner: role,
+        workspace: 'default',
+        type: 'pattern',
+        content: {
+          title: `Insight: ${title}`,
+          problem: `Chat discussion: "${q}"`,
+          attemptedFix: '',
+          outcome: 'Stored from live chat session',
+          recommendation: summary || `Standard solution for: ${q}`,
+          codeSnippet: ''
+        },
+        source: {
+          sessionId,
+          channel: 'chat_extraction',
+          author: role
+        },
+        lifecycle: {
+          status: 'active',
+          confidence: 0.95,
+          tags: ['long-term-memory', 'auto-extracted']
+        }
+      });
+
+      console.log(`[LongTermMemory] Saved to MongoDB Atlas: "${doc.content.title}"`);
+      return doc;
+    } catch (err) {
+      console.warn('[LongTermMemory] Distillation note:', err.message);
+      return null;
+    }
   }
 
   /**

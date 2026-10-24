@@ -8,7 +8,6 @@ import SettingsModal from './components/SettingsModal';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('assistant');
-  const [workspace, setWorkspace] = useState('auth-service');
   const [memories, setMemories] = useState([]);
   const [health, setHealth] = useState(null);
   const [inspectingMemoryId, setInspectingMemoryId] = useState(null);
@@ -70,8 +69,6 @@ export default function App() {
       <Navbar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        workspace={workspace}
-        setWorkspace={setWorkspace}
         health={health}
         onOpenRecordModal={() => setRecordModalOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -81,17 +78,15 @@ export default function App() {
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6">
         {activeTab === 'assistant' && (
           <AgentSession
-            workspace={workspace}
             onInspectMemory={setInspectingMemoryId}
             onOpenRecordModal={() => setRecordModalOpen(true)}
+            onNavigateToMemory={() => setActiveTab('repository')}
           />
         )}
 
         {activeTab === 'repository' && (
           <MemoryHub
             memories={memories}
-            workspace={workspace}
-            setWorkspace={setWorkspace}
             onInspectMemory={setInspectingMemoryId}
             onOpenRecordModal={() => setRecordModalOpen(true)}
             onRefresh={fetchMemories}

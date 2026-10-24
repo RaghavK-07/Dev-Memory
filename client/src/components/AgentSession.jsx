@@ -1,21 +1,20 @@
 import React, { useState } from 'react';
-import { Send, Check, Copy, ShieldAlert, Sparkles, PlusCircle, Terminal, Layers, CheckCircle2 } from 'lucide-react';
+import { Send, Check, Copy, ShieldAlert, Sparkles, PlusCircle, Database, Layers, CheckCircle2 } from 'lucide-react';
 
 export default function AgentSession({
-  workspace,
   onInspectMemory,
-  onOpenRecordModal
+  onOpenRecordModal,
+  onNavigateToMemory
 }) {
   const [inputQuery, setInputQuery] = useState('');
   const [messages, setMessages] = useState([
     {
       id: 'welcome',
       sender: 'agent',
-      text: `Hello! I am DevMemory, your AI pair programmer for **\`${workspace}\`**.
+      text: `Hello! I am **DevMemory**, your AI assistant powered by **Short-Term** and **MongoDB Long-Term Memory**.
 
-I work like a standard coding assistant, but with **persistent memory in MongoDB Atlas**. 
-- Whenever you encounter an issue that has failed in the past, I will **automatically rectify it** in the code I generate.
-- You can teach me new invariants anytime by saying *"Remember that..."* or clicking **Teach Bug / Rule**.`,
+- **Short-Term Memory**: I retain full context across all prompts in our session. Ask follow-up questions, request optimizations, or paste code naturally!
+- **Long-Term Memory (MongoDB Atlas)**: Every interaction automatically extracts and commits key takeaways, rules, and decisions to MongoDB. On future chats, I will automatically recall them and prevent past mistakes.`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       behaviorNotice: null,
       recalledMemories: []
@@ -24,11 +23,11 @@ I work like a standard coding assistant, but with **persistent memory in MongoDB
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(null);
 
-  // Quick test prompts to verify normal + auto-rectifying behavior
+  // Quick test prompts to verify short-term + long-term memory
   const quickPrompts = [
-    { label: 'Test Auto-Rectify (Token Expiry)', text: 'How should we handle 401 token expiration in our auth middleware?' },
-    { label: 'Test Auto-Rectify (Float Math)', text: 'How should I compute total price with discount and taxes for Stripe?' },
-    { label: 'Teach AI New Rule', text: 'Remember that all database queries in this workspace must use connection timeouts of 5000ms.' },
+    { label: 'Recall from Long-Term (401 Expiry)', text: 'How should we handle 401 token expiration in our auth middleware?' },
+    { label: 'Recall from Long-Term (Float Math)', text: 'How should I compute total price with discount and taxes for Stripe?' },
+    { label: 'Teach a Rule', text: 'Remember that all database queries must use connection timeouts of 5000ms.' },
     { label: 'Normal Coding Task', text: 'Write a TypeScript function to parse query parameters into a typed object.' }
   ];
 
@@ -48,7 +47,7 @@ I work like a standard coding assistant, but with **persistent memory in MongoDB
     setIsSubmitting(true);
 
     try {
-      // Pass previous conversational turns as temporary working memory
+      // Pass previous conversational turns as short-term working memory
       const history = messages
         .filter(m => !m.isError && m.id !== 'welcome')
         .slice(-10)
@@ -64,7 +63,7 @@ I work like a standard coding assistant, but with **persistent memory in MongoDB
           query,
           history,
           sessionId: 'session-live',
-          workspace,
+          workspace: 'default',
           role: 'developer'
         })
       });
@@ -113,9 +112,9 @@ I work like a standard coding assistant, but with **persistent memory in MongoDB
       {/* Session Header */}
       <div className="px-5 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-          <span className="text-xs font-semibold text-slate-800">AI Coding Assistant</span>
-          <span className="text-[11px] font-mono text-slate-500">• {workspace}</span>
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span className="text-xs font-semibold text-slate-800">DevMemory Assistant</span>
+          <span className="text-[11px] font-mono text-slate-500">• Short-Term & Long-Term Memory Active</span>
         </div>
 
         <button
@@ -123,7 +122,7 @@ I work like a standard coding assistant, but with **persistent memory in MongoDB
           className="text-xs font-medium text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5"
         >
           <PlusCircle className="w-3.5 h-3.5" />
-          <span>Teach Bug / Rule</span>
+          <span>Add to Memory</span>
         </button>
       </div>
 
@@ -156,10 +155,10 @@ I work like a standard coding assistant, but with **persistent memory in MongoDB
               {msg.newlyLearnedMemory && (
                 <div className="mb-3 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 flex items-start justify-between gap-2">
                   <div className="flex items-start gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
+                    <Database className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
                     <div>
                       <span className="font-semibold text-[11px] block text-emerald-800">
-                        Committed to Memory (MongoDB Atlas)
+                        Committed to Long-Term Memory (MongoDB Atlas)
                       </span>
                       <span className="text-[11px] text-emerald-950 font-medium">
                         "{msg.newlyLearnedMemory.content.title}"
@@ -168,9 +167,9 @@ I work like a standard coding assistant, but with **persistent memory in MongoDB
                   </div>
                   <button
                     onClick={() => onInspectMemory(msg.newlyLearnedMemory._id)}
-                    className="text-[10px] font-mono font-medium text-emerald-700 underline"
+                    className="text-[10px] font-mono font-medium text-emerald-700 hover:text-emerald-900 underline whitespace-nowrap"
                   >
-                    View in Hub →
+                    Inspect Memory →
                   </button>
                 </div>
               )}
@@ -182,7 +181,7 @@ I work like a standard coding assistant, but with **persistent memory in MongoDB
                     <div className="flex items-center gap-1.5">
                       <ShieldAlert className="w-4 h-4 text-amber-700 flex-shrink-0" />
                       <span className="font-semibold text-[11px] uppercase tracking-wider text-amber-800">
-                        Auto-Rectified from Memory
+                        Auto-Rectified from Long-Term Memory
                       </span>
                     </div>
                     <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
@@ -249,7 +248,7 @@ I work like a standard coding assistant, but with **persistent memory in MongoDB
         {isSubmitting && (
           <div className="flex items-center gap-2.5 text-slate-600 text-xs font-mono p-3 bg-slate-50 border border-slate-200/80 rounded-lg">
             <div className="w-3.5 h-3.5 border-2 border-slate-800 border-t-transparent rounded-full animate-spin"></div>
-            <span>Reasoning with Gemini & checking persistent memory in MongoDB Atlas...</span>
+            <span>Reasoning with Gemini & querying persistent memory in MongoDB Atlas...</span>
           </div>
         )}
       </div>
@@ -289,7 +288,7 @@ I work like a standard coding assistant, but with **persistent memory in MongoDB
                   handleSend();
                 }
               }}
-              placeholder={`Ask DevMemory anything, paste code, or say "Remember that..." to teach a rule... (Shift+Enter for newline)`}
+              placeholder={`Ask DevMemory anything, paste code, or state a project rule... (Shift+Enter for newline)`}
               disabled={isSubmitting}
               className="flex-1 min-h-[52px] max-h-[160px] resize-y bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-900 focus:bg-white transition leading-relaxed"
             />
@@ -304,7 +303,7 @@ I work like a standard coding assistant, but with **persistent memory in MongoDB
           </div>
           <div className="flex items-center justify-between px-1 text-[10px] text-slate-400">
             <span>Press <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-600 font-mono">Enter ↵</kbd> to send, <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-600 font-mono">Shift + Enter</kbd> for new line</span>
-            <span>Workspace: <strong className="text-slate-600 font-mono">{workspace}</strong></span>
+            <span>Short-Term Context: <strong className="text-slate-600 font-mono">Active</strong> • Long-Term Store: <strong className="text-emerald-700 font-mono">MongoDB Atlas</strong></span>
           </div>
         </form>
       </div>

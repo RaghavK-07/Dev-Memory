@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { X, CheckCircle2, AlertCircle, Database } from 'lucide-react';
 
-export default function RecordMemoryModal({ isOpen, onClose, currentWorkspace, onCreated }) {
-  const [workspace, setWorkspace] = useState(currentWorkspace || 'auth-service');
+export default function RecordMemoryModal({ isOpen, onClose, onCreated }) {
   const [type, setType] = useState('failed_fix');
   const [title, setTitle] = useState('');
   const [problem, setProblem] = useState('');
@@ -29,7 +28,7 @@ export default function RecordMemoryModal({ isOpen, onClose, currentWorkspace, o
     try {
       const payload = {
         owner: 'developer',
-        workspace,
+        workspace: 'default',
         type,
         content: {
           title: title.trim(),
@@ -100,33 +99,19 @@ export default function RecordMemoryModal({ isOpen, onClose, currentWorkspace, o
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block font-medium text-slate-700 mb-1">Workspace</label>
-              <select
-                value={workspace}
-                onChange={(e) => setWorkspace(e.target.value)}
-                className="w-full bg-white border border-slate-200 rounded-md px-3 py-1.5 text-slate-800 focus:outline-none focus:ring-1 focus:ring-slate-900 font-mono text-xs"
-              >
-                <option value="auth-service">auth-service</option>
-                <option value="payment-gateway">payment-gateway</option>
-                <option value="checkout-api">checkout-api</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block font-medium text-slate-700 mb-1">Memory Type</label>
-              <select
-                value={type}
-                onChange={(e) => setType(e.target.value)}
-                className="w-full bg-white border border-slate-200 rounded-md px-3 py-1.5 text-slate-800 focus:outline-none focus:ring-1 focus:ring-slate-900 text-xs"
-              >
-                <option value="failed_fix">Failed Fix (Anti-pattern to avoid)</option>
-                <option value="constraint">Constraint (Mandatory requirement)</option>
-                <option value="convention">Convention (Style or standard)</option>
-                <option value="architecture">Architecture (System invariant)</option>
-              </select>
-            </div>
+          <div>
+            <label className="block font-medium text-slate-700 mb-1">Memory Type</label>
+            <select
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+              className="w-full bg-white border border-slate-200 rounded-md px-3 py-1.5 text-slate-800 focus:outline-none focus:ring-1 focus:ring-slate-900 text-xs"
+            >
+              <option value="failed_fix">Failed Fix (Anti-pattern to avoid)</option>
+              <option value="constraint">Constraint (Mandatory requirement)</option>
+              <option value="convention">Convention (Style or standard)</option>
+              <option value="architecture">Architecture (System invariant)</option>
+              <option value="pattern">Pattern (Proven solution)</option>
+            </select>
           </div>
 
           <div>

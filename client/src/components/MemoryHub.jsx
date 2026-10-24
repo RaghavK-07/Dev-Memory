@@ -3,8 +3,6 @@ import { Search, Plus, Filter, Eye, AlertOctagon, Shield, BookCheck, Compass, Ch
 
 export default function MemoryHub({
   memories,
-  workspace,
-  setWorkspace,
   onInspectMemory,
   onOpenRecordModal,
   onRefresh
@@ -15,10 +13,8 @@ export default function MemoryHub({
   // Calculate metrics
   const totalMemories = memories.length;
   const totalRectifications = memories.reduce((acc, m) => acc + (m.recallStats?.recallsCount || 0), 0);
-  const activeWorkspaces = Array.from(new Set(memories.map(m => m.workspace))).length;
 
   const filtered = memories.filter(m => {
-    if (workspace !== 'all' && m.workspace !== workspace) return false;
     if (selectedType !== 'all' && m.type !== selectedType) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -53,7 +49,7 @@ export default function MemoryHub({
       case 'architecture':
         return { label: 'Architecture', bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' };
       default:
-        return { label: type, bg: 'bg-slate-50', text: 'text-slate-700', border: 'border-slate-200' };
+        return { label: type || 'Pattern', bg: 'bg-slate-50', text: 'text-slate-700', border: 'border-slate-200' };
     }
   };
 
@@ -64,7 +60,7 @@ export default function MemoryHub({
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Persistent Memories</span>
+            <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Long-Term Memories</span>
             <span className="text-xl font-bold text-slate-900 mt-0.5 block">{totalMemories}</span>
           </div>
           <div className="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center text-slate-700">
@@ -84,11 +80,14 @@ export default function MemoryHub({
 
         <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Active Workspaces</span>
-            <span className="text-xl font-bold text-slate-900 mt-0.5 block">{activeWorkspaces}</span>
+            <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">MongoDB Atlas Real-Time</span>
+            <span className="text-sm font-bold text-emerald-600 mt-1 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              Change Stream Active
+            </span>
           </div>
-          <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600">
-            <Shield className="w-4 h-4" />
+          <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600">
+            <CheckCircle2 className="w-4 h-4" />
           </div>
         </div>
       </div>
@@ -103,24 +102,13 @@ export default function MemoryHub({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search what the AI remembers (bugs, rules, keywords)..."
+            placeholder="Search long-term memories (bugs, rules, keywords)..."
             className="w-full bg-slate-50 border border-slate-200 rounded-md pl-9 pr-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-900 focus:bg-white transition"
           />
         </div>
 
         {/* Filter Controls */}
         <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={workspace}
-            onChange={(e) => setWorkspace(e.target.value)}
-            className="bg-slate-50 border border-slate-200 rounded-md px-2.5 py-1.5 text-xs font-mono text-slate-700 focus:outline-none focus:ring-1 focus:ring-slate-900 cursor-pointer"
-          >
-            <option value="all">Workspace: All</option>
-            <option value="auth-service">auth-service</option>
-            <option value="payment-gateway">payment-gateway</option>
-            <option value="checkout-api">checkout-api</option>
-          </select>
-
           <select
             value={selectedType}
             onChange={(e) => setSelectedType(e.target.value)}
@@ -131,6 +119,7 @@ export default function MemoryHub({
             <option value="constraint">Constraints</option>
             <option value="convention">Conventions</option>
             <option value="architecture">Architectures</option>
+            <option value="pattern">Patterns</option>
           </select>
 
           <button
@@ -138,7 +127,7 @@ export default function MemoryHub({
             className="px-3 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium transition flex items-center gap-1.5"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>Teach New Invariant</span>
+            <span>Add Memory</span>
           </button>
         </div>
 
@@ -169,11 +158,8 @@ export default function MemoryHub({
                     <span className={`px-2 py-0.5 rounded text-[10px] font-medium border ${badge.bg} ${badge.text} ${badge.border}`}>
                       {badge.label}
                     </span>
-                    <span className="text-[11px] font-mono text-slate-500">
-                      {memory.workspace}
-                    </span>
                     <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-100 text-slate-600">
-                      {memory.lifecycle?.status}
+                      {memory.lifecycle?.status || 'active'}
                     </span>
                   </div>
 
