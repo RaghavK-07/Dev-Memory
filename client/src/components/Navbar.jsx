@@ -1,5 +1,5 @@
 import React from 'react';
-import { Terminal, Database, Plus, Search, Layers, MessageSquare, CheckCircle2 } from 'lucide-react';
+import { Terminal, Database, Plus, Search, Layers, MessageSquare, CheckCircle2, Settings } from 'lucide-react';
 
 export default function Navbar({
   activeTab,
@@ -7,7 +7,8 @@ export default function Navbar({
   workspace,
   setWorkspace,
   health,
-  onOpenRecordModal
+  onOpenRecordModal,
+  onOpenSettings
 }) {
   return (
     <header className="border-b border-slate-200 bg-white sticky top-0 z-40">
@@ -76,13 +77,21 @@ export default function Navbar({
           </nav>
 
           {/* Right Action: Record Rule + Connection Pill */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <button
               onClick={onOpenRecordModal}
               className="px-3 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium transition flex items-center gap-1.5 shadow-sm"
             >
               <Plus className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Record Bug / Rule</span>
+            </button>
+
+            <button
+              onClick={onOpenSettings}
+              title="AI Model & API Key Settings"
+              className="p-1.5 rounded-md border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition"
+            >
+              <Settings className="w-3.5 h-3.5" />
             </button>
 
             {/* MongoDB Atlas Status */}

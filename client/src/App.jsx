@@ -4,6 +4,7 @@ import AgentSession from './components/AgentSession';
 import MemoryHub from './components/MemoryHub';
 import MemoryInspectorModal from './components/MemoryInspectorModal';
 import RecordMemoryModal from './components/RecordMemoryModal';
+import SettingsModal from './components/SettingsModal';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('assistant');
@@ -12,6 +13,7 @@ export default function App() {
   const [health, setHealth] = useState(null);
   const [inspectingMemoryId, setInspectingMemoryId] = useState(null);
   const [recordModalOpen, setRecordModalOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Fetch memories from MongoDB
   const fetchMemories = useCallback(async () => {
@@ -72,6 +74,7 @@ export default function App() {
         setWorkspace={setWorkspace}
         health={health}
         onOpenRecordModal={() => setRecordModalOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       {/* Main Content */}
@@ -91,6 +94,7 @@ export default function App() {
             setWorkspace={setWorkspace}
             onInspectMemory={setInspectingMemoryId}
             onOpenRecordModal={() => setRecordModalOpen(true)}
+            onRefresh={fetchMemories}
           />
         )}
       </main>
@@ -113,6 +117,12 @@ export default function App() {
         onClose={() => setRecordModalOpen(false)}
         currentWorkspace={workspace}
         onCreated={handleMemoryCreated}
+      />
+
+      {/* AI Model Settings Modal */}
+      <SettingsModal
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
       />
 
     </div>
