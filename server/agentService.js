@@ -424,7 +424,16 @@ app.use(cors({
 If your requests use cookies or \`Authorization\` headers, ensure \`credentials: true\` is set on both server and client fetch (\`credentials: 'include'\`).`;
     }
 
-    // 7. Generic Code Generation requests
+    // 7. Simple Math & Expressions
+    if (/^[\d\s+\-*/().%^]+$/.test(qLower) && /\d/.test(qLower)) {
+      try {
+        const sanitized = qLower.replace(/[^-()\d/*+.]/g, '');
+        const result = Function(`'use strict'; return (${sanitized})`)();
+        return `${query} = **${result}**`;
+      } catch (e) {}
+    }
+
+    // 8. Generic Code Generation requests
     if (qLower.includes('email') && (qLower.includes('validate') || qLower.includes('regex'))) {
       return `Here is a reliable email validation utility:
 
@@ -491,20 +500,41 @@ ${memoryDirectives || 'No prior failures in memory for this topic yet.'}
 
 Be helpful, concise, conversational, and provide clean working code when requested. If it is a greeting or general question, answer naturally without dumping unrelated code.`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
-    
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          { role: 'user', parts: [{ text: `${systemPrompt}\n\nUser Question: ${query}` }] }
-        ]
-      })
-    });
+    const models = [
+      'gemini-3.5-flash-lite',
+      'gemini-3.5-flash',
+      'gemini-flash-latest',
+      'gemini-3.8-flash'
+    ];
 
-    const data = await res.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || this.generateIntelligentResponse(query, workspace, memories, newlyLearnedMemory);
+    for (const model of models) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
+              { role: 'user', parts: [{ text: `${systemPrompt}\n\nUser Question: ${query}` }] }
+            ]
+          })
+        });
+
+        const data = await res.json();
+        const candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (candidateText) {
+          return candidateText;
+        }
+
+        if (data.error) {
+          console.warn(`[Gemini] Model ${model} returned error:`, data.error.message);
+        }
+      } catch (err) {
+        console.warn(`[Gemini] Model ${model} fetch failed:`, err.message);
+      }
+    }
+
+    return this.generateIntelligentResponse(query, workspace, memories, newlyLearnedMemory);
   }
 
   /**
