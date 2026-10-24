@@ -122,6 +122,13 @@ class MemoryRepository {
       }
     }
 
+    // Broadcast change event for real-time SSE updates
+    dbManager.emit('memory_change', {
+      operationType: 'insert',
+      documentId: doc._id,
+      fullDocument: doc
+    });
+
     return doc;
   }
 
@@ -320,6 +327,11 @@ class MemoryRepository {
         // Ignored in fallback
       }
     }
+
+    dbManager.emit('memory_change', {
+      operationType: hard ? 'delete' : 'update',
+      documentId: strId
+    });
   }
 }
 

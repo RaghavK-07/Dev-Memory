@@ -17,22 +17,33 @@ class AgentService {
     const timestamp = new Date();
     const queryTrimmed = (query || '').trim();
     const queryLower = queryTrimmed.toLowerCase();
+    const isGreeting = this.isSimpleGreeting(queryLower);
 
-    // 1. Detect if the user is explicitly teaching the AI something to remember
-    const autoLearn = this.detectLearningIntent(queryTrimmed, workspace);
+    // 1. Detect if the user is conveying an invariant, rule, decision, or bug to remember
+    let autoLearn = !isGreeting ? this.detectLearningIntent(queryTrimmed, workspace) : null;
+
+    // If rule-based didn't trigger, and LLM is enabled, check with smart LLM classifier
+    if (!autoLearn && !isGreeting && process.env.GEMINI_API_KEY && this.couldBeMemoryCandidate(queryTrimmed)) {
+      try {
+        autoLearn = await this.extractMemoryWithLLM(queryTrimmed, history, workspace);
+      } catch (err) {
+        console.warn('[Agent] LLM memory extraction note:', err.message);
+      }
+    }
+
     let newlyLearnedMemory = null;
 
     if (autoLearn) {
       newlyLearnedMemory = await memoryRepo.createMemory({
         owner: role,
         workspace,
-        type: autoLearn.type,
+        type: autoLearn.type || 'constraint',
         content: {
-          title: autoLearn.title,
-          problem: autoLearn.problem,
+          title: autoLearn.title || 'Project Invariant',
+          problem: autoLearn.problem || `Project constraint in ${workspace}: "${queryTrimmed}"`,
           attemptedFix: autoLearn.attemptedFix || '',
           outcome: autoLearn.outcome || '',
-          recommendation: autoLearn.recommendation,
+          recommendation: autoLearn.recommendation || queryTrimmed,
           codeSnippet: autoLearn.codeSnippet || ''
         },
         source: {
@@ -43,14 +54,13 @@ class AgentService {
         lifecycle: {
           status: 'active',
           confidence: 1.0,
-          tags: autoLearn.tags || ['learned-in-chat']
+          tags: autoLearn.tags || ['learned-in-chat', workspace]
         }
       });
     }
 
     // 2. Query MongoDB Vector Search for relevant memories in this workspace
     // (Only query vector search if it's not a simple greeting)
-    const isGreeting = this.isSimpleGreeting(queryLower);
     let recalledMemories = [];
 
     if (!isGreeting && !newlyLearnedMemory) {
@@ -140,20 +150,21 @@ class AgentService {
   }
 
   /**
-   * Automatically detect if the user is conveying an invariant or bug to remember
+   * Fast rule-based invariant & bug detection across conversational statements
    */
   detectLearningIntent(query, workspace) {
     const q = query.trim();
     const lower = q.toLowerCase();
 
-    const triggerMatch = lower.match(/(?:remember that|note that|keep in mind that|new rule:|from now on,|never use|always use|we migrated to|bug fix:)\s*(.*)/i);
+    // 1. Explicit triggers: "remember that...", "note that...", "rule:...", "from now on..."
+    const triggerMatch = lower.match(/(?:remember\s+(?:that)?|keep\s+in\s+mind\s+(?:that)?|note\s+(?:that)?|from\s+now\s+on,?\s*|new\s+rule:?|rule:?|invariant:?)\s*(.*)/i);
     if (triggerMatch && triggerMatch[1]) {
       const ruleText = triggerMatch[1].trim();
-      const isNegative = lower.includes('never') || lower.includes("don't") || lower.includes('failed') || lower.includes('bug');
+      const isNegative = lower.includes('never') || lower.includes("don't") || lower.includes('failed') || lower.includes('avoid');
 
       return {
         type: isNegative ? 'failed_fix' : 'constraint',
-        title: ruleText.length > 60 ? ruleText.slice(0, 57) + '...' : ruleText,
+        title: this.formatTitle(ruleText),
         problem: `Project invariant in ${workspace}: "${q}"`,
         attemptedFix: isNegative ? q : '',
         outcome: isNegative ? 'Anti-pattern marked by developer' : 'Approved invariant',
@@ -162,11 +173,77 @@ class AgentService {
       };
     }
 
-    const failMatch = lower.match(/(.+)\s+(?:failed|broke|threw an error|crashed)\s+(?:because|with|due to)\s+(.+)/i);
+    // 2. Prohibitions & Anti-patterns: "never use...", "don't use / do not use...", "avoid..."
+    const prohibitionMatch = lower.match(/(?:never|do\s+not|don't|avoid)\s+(?:use|allow|store|commit|return|pass|accept|execute|call|log|expose|send|put|keep|render)\s+(.*)/i);
+    if (prohibitionMatch && prohibitionMatch[1]) {
+      return {
+        type: 'failed_fix',
+        title: this.formatTitle(`Avoid ${prohibitionMatch[1].trim()}`),
+        problem: `Prohibited anti-pattern in ${workspace}: "${q}"`,
+        attemptedFix: q,
+        outcome: 'Marked as insecure or broken anti-pattern',
+        recommendation: `Do not ${prohibitionMatch[0].trim()}`,
+        tags: ['anti-pattern', 'constraint', workspace]
+      };
+    }
+
+    // 3. Project scope statements: "In our auth service, all user passwords..."
+    const scopeMatch = lower.match(/(?:in\s+(?:this|our)\s+.*?(?:project|workspace|service|codebase|app|repo|system|backend|frontend),?)\s*(.+)/i);
+    if (scopeMatch && scopeMatch[1] && scopeMatch[1].length > 10) {
+      const statement = scopeMatch[1].trim();
+      return {
+        type: 'constraint',
+        title: this.formatTitle(statement),
+        problem: `Architecture policy for ${workspace}: "${q}"`,
+        recommendation: q,
+        tags: ['architecture-decision', workspace]
+      };
+    }
+
+    // 4. Mandatory invariants: "all X must have...", "queries must use...", "passwords must be..."
+    const mustMatch = lower.match(/(.+?)\s+must\s+(?:always\s+)?(?:be|have|use|implement|return|follow|contain|include|validate|enforce|run|match|check)\s+(.+)/i);
+    if (mustMatch) {
+      return {
+        type: 'constraint',
+        title: this.formatTitle(q),
+        problem: `Mandatory standard in ${workspace}: "${q}"`,
+        recommendation: q,
+        tags: ['coding-standard', 'constraint', workspace]
+      };
+    }
+
+    // 5. Positive directives: "always use...", "ensure that...", "make sure that..."
+    const alwaysMatch = lower.match(/(?:always|ensure\s+that|make\s+sure\s+that|require)\s+(.*)/i);
+    if (alwaysMatch && alwaysMatch[1]) {
+      return {
+        type: 'constraint',
+        title: this.formatTitle(q),
+        problem: `Mandatory standard in ${workspace}: "${q}"`,
+        recommendation: q,
+        tags: ['coding-standard', 'constraint', workspace]
+      };
+    }
+
+    // 6. Bug fixes & resolutions
+    const fixMatch = lower.match(/(?:we\s+fixed\s+(?:the\s+)?(?:bug|issue|problem|crash|error)?\s*(?:where|in)?\s*(.+?)\s+by\s+(.+))/i);
+    if (fixMatch) {
+      return {
+        type: 'failed_fix',
+        title: this.formatTitle(`Bug fix: ${fixMatch[1].trim()}`),
+        problem: fixMatch[1].trim(),
+        attemptedFix: fixMatch[1].trim(),
+        outcome: 'Resolved via verified fix',
+        recommendation: `Fix applied: ${fixMatch[2].trim()}`,
+        tags: ['bug-fix', 'postmortem', workspace]
+      };
+    }
+
+    // 7. System failure / Crash post-mortems
+    const failMatch = lower.match(/(.+?)\s+(?:failed|broke|threw an error|crashed|caused a bug|caused a leak)\s+(?:because|with|due to|when)\s+(.+)/i);
     if (failMatch) {
       return {
         type: 'failed_fix',
-        title: `Failure: ${failMatch[1].slice(0, 40).trim()}`,
+        title: this.formatTitle(`Failure: ${failMatch[1].slice(0, 45).trim()}`),
         problem: failMatch[1].trim(),
         attemptedFix: failMatch[1].trim(),
         outcome: failMatch[2].trim(),
@@ -175,6 +252,91 @@ class AgentService {
       };
     }
 
+    return null;
+  }
+
+  formatTitle(str) {
+    if (!str) return 'Project Invariant';
+    const clean = str.replace(/[!?,.]/g, '').trim();
+    const capitalized = clean.charAt(0).toUpperCase() + clean.slice(1);
+    return capitalized.length > 55 ? capitalized.slice(0, 52) + '...' : capitalized;
+  }
+
+  /**
+   * Check if a conversational message might contain an invariant or bug fix to extract
+   */
+  couldBeMemoryCandidate(text) {
+    if (!text || text.length < 15) return false;
+    const lower = text.toLowerCase();
+    if (/^(what|how|why|where|who|when|can you|could you|please explain|tell me)\b/i.test(lower)) {
+      return false;
+    }
+    const indicatorWords = [
+      'rule', 'never', 'always', 'must', 'should', "don't", 'fix', 'fixed', 
+      'bug', 'failed', 'crash', 'avoid', 'in our', 'for this', 'standard', 
+      'convention', 'timeout', 'token', 'security', 'schema', 'database', 
+      'redis', 'mongo', 'postgres', 'policy', 'enforce', 'require', 'decided', 'switched'
+    ];
+    return indicatorWords.some(w => lower.includes(w));
+  }
+
+  /**
+   * LLM-assisted zero-shot invariant extraction for natural conversational chats
+   */
+  async extractMemoryWithLLM(query, history = [], workspace) {
+    if (!process.env.GEMINI_API_KEY) return null;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    const prompt = `Analyze if this developer chat message sets a permanent project rule, architectural constraint, coding convention, or bug post-mortem/fix to remember for workspace "${workspace}".
+
+Message: "${query}"
+
+If it DOES describe a rule, constraint, convention, or bug fix to remember, reply with a JSON object:
+{
+  "isMemory": true,
+  "type": "constraint",
+  "title": "Concise title under 55 characters",
+  "problem": "Brief description of the context or problem",
+  "recommendation": "The exact rule or rectified solution to follow",
+  "tags": ["tag1", "tag2"]
+}
+(Note: Use "type": "failed_fix" if it describes a past failure or anti-pattern to avoid).
+
+If it is just a normal question, coding request, review request, or chit-chat, reply with:
+{ "isMemory": false }
+
+Output pure JSON only.`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: 'application/json'
+        }
+      })
+    });
+
+    const data = await res.json();
+    const candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (candidateText) {
+      try {
+        const parsed = JSON.parse(candidateText.trim());
+        if (parsed && parsed.isMemory && parsed.title && parsed.recommendation) {
+          return {
+            type: parsed.type || 'constraint',
+            title: parsed.title,
+            problem: parsed.problem || `Constraint in ${workspace}`,
+            recommendation: parsed.recommendation,
+            tags: Array.isArray(parsed.tags) ? parsed.tags : ['conversational-learning', workspace]
+          };
+        }
+      } catch (e) {
+        // Fallback to null
+      }
+    }
     return null;
   }
 
@@ -514,7 +676,13 @@ Current workspace: ${workspace}.
 CRITICAL INSTRUCTIONS:
 1. Multi-turn Session Working Memory:
 You MUST maintain active conversational context across previous prompts in this session. For example, if the user previously asked "Can you optimise it?" and now provides code, you MUST directly optimize that code based on the previous conversation!
-2. Persistent MongoDB Invariants:
+${newlyLearnedMemory ? `2. NEWLY COMMITTED PROJECT MEMORY:
+You just automatically captured and committed this new invariant into persistent MongoDB memory:
+- Title: "${newlyLearnedMemory.content.title}"
+- Type: ${newlyLearnedMemory.type}
+- Mandated Rule: "${newlyLearnedMemory.content.recommendation}"
+Clearly acknowledge this new learning, explain why it protects ${workspace}, and confirm that all future code generations will automatically enforce this invariant.` : ''}
+3. Persistent MongoDB Invariants:
 If any project invariants below apply to the user's question, you MUST automatically rectify the code and adhere strictly to them:
 ${memoryDirectives || 'No prior failures in memory for this topic yet.'}
 
