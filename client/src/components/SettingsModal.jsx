@@ -6,7 +6,9 @@ export default function SettingsModal({ isOpen, onClose }) {
   const [openaiKey, setOpenaiKey] = useState('');
   const [status, setStatus] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
   const [message, setMessage] = useState(null);
+  const [testResult, setTestResult] = useState(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -22,10 +24,37 @@ export default function SettingsModal({ isOpen, onClose }) {
 
   if (!isOpen) return null;
 
+  const handleTestKey = async (provider) => {
+    setIsTesting(true);
+    setTestResult(null);
+    setMessage(null);
+
+    const apiKey = provider === 'gemini' ? geminiKey : openaiKey;
+
+    try {
+      const res = await fetch('/api/system/test-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, apiKey })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestResult({ success: true, text: data.message });
+      } else {
+        setTestResult({ success: false, text: data.error });
+      }
+    } catch (err) {
+      setTestResult({ success: false, text: err.message });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
   const handleSave = async (e) => {
     e.preventDefault();
     setIsSaving(true);
     setMessage(null);
+    setTestResult(null);
 
     try {
       const res = await fetch('/api/system/settings', {
@@ -76,18 +105,38 @@ export default function SettingsModal({ isOpen, onClose }) {
             </div>
           )}
 
+          {testResult && (
+            <div className={`p-2.5 rounded border text-[11px] font-medium ${
+              testResult.success
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-red-50 border-red-200 text-red-800'
+            }`}>
+              {testResult.text}
+            </div>
+          )}
+
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="font-medium text-slate-700">Google Gemini API Key (Recommended, Free)</label>
-              {status?.hasGemini && (
-                <span className="text-[10px] text-emerald-600 font-medium">Configured</span>
-              )}
+              <div className="flex items-center gap-2">
+                {status?.hasGemini && (
+                  <span className="text-[10px] text-emerald-600 font-medium">Configured</span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleTestKey('gemini')}
+                  disabled={isTesting}
+                  className="text-[10px] font-mono text-slate-500 hover:text-slate-900 underline disabled:opacity-50"
+                >
+                  {isTesting ? 'Testing...' : 'Test Connection'}
+                </button>
+              </div>
             </div>
             <input
               type="password"
               value={geminiKey}
               onChange={(e) => setGeminiKey(e.target.value)}
-              placeholder={status?.hasGemini ? "••••••••••••••••" : "Paste your Gemini API key..."}
+              placeholder={status?.hasGemini ? "•••••••••••••••• (Leave blank to keep active)" : "Paste your Gemini API key (AIzaSy...)"}
               className="w-full bg-slate-50 border border-slate-200 rounded-md px-3 py-1.5 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-900 focus:bg-white"
             />
             <a
@@ -103,9 +152,19 @@ export default function SettingsModal({ isOpen, onClose }) {
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="font-medium text-slate-700">OpenAI API Key (Optional)</label>
-              {status?.hasOpenAI && (
-                <span className="text-[10px] text-emerald-600 font-medium">Configured</span>
-              )}
+              <div className="flex items-center gap-2">
+                {status?.hasOpenAI && (
+                  <span className="text-[10px] text-emerald-600 font-medium">Configured</span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleTestKey('openai')}
+                  disabled={isTesting}
+                  className="text-[10px] font-mono text-slate-500 hover:text-slate-900 underline disabled:opacity-50"
+                >
+                  {isTesting ? 'Testing...' : 'Test Connection'}
+                </button>
+              </div>
             </div>
             <input
               type="password"

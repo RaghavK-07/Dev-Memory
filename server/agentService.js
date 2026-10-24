@@ -286,7 +286,7 @@ class AgentService {
   async extractMemoryWithLLM(query, history = [], workspace) {
     if (!process.env.GEMINI_API_KEY) return null;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`;
     const prompt = `Analyze if this developer chat message sets a permanent project rule, architectural constraint, coding convention, or bug post-mortem/fix to remember for workspace "${workspace}".
 
 Message: "${query}"
@@ -310,6 +310,7 @@ Output pure JSON only.`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(2500),
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig: {
@@ -714,12 +715,7 @@ Be helpful, direct, conversational, and provide clean, working, optimized code w
       parts: [{ text: query }]
     });
 
-    const models = [
-      'gemini-3.5-flash-lite',
-      'gemini-3.5-flash',
-      'gemini-flash-latest',
-      'gemini-3.8-flash'
-    ];
+    const models = ['gemini-flash-latest'];
 
     for (const model of models) {
       try {
@@ -727,6 +723,7 @@ Be helpful, direct, conversational, and provide clean, working, optimized code w
         const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(3500),
           body: JSON.stringify({
             systemInstruction: {
               parts: [{ text: systemPrompt }]
@@ -745,7 +742,7 @@ Be helpful, direct, conversational, and provide clean, working, optimized code w
           console.warn(`[Gemini] Model ${model} returned error:`, data.error.message);
         }
       } catch (err) {
-        console.warn(`[Gemini] Model ${model} fetch failed:`, err.message);
+        console.warn(`[Gemini] Live API call unavailable (${err.message}), falling back to instant local intelligence engine`);
       }
     }
 
@@ -789,6 +786,7 @@ ${memoryDirectives}`
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
       },
+      signal: AbortSignal.timeout(6000),
       body: JSON.stringify({
         model: 'gpt-4o-mini',
         messages

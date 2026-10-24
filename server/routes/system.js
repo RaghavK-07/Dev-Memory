@@ -78,6 +78,57 @@ router.post('/settings', (req, res) => {
   }
 });
 
+// Test LLM API Key live with Google / OpenAI
+router.post('/test-key', async (req, res) => {
+  const { provider, apiKey } = req.body;
+  const keyToTest = (apiKey || (provider === 'openai' ? process.env.OPENAI_API_KEY : process.env.GEMINI_API_KEY) || '').trim();
+
+  if (!keyToTest) {
+    return res.status(400).json({ success: false, error: 'No API key provided to test' });
+  }
+
+  if (provider === 'openai') {
+    try {
+      const resp = await fetch('https://api.openai.com/v1/models', {
+        headers: { Authorization: `Bearer ${keyToTest}` },
+        signal: AbortSignal.timeout(5000)
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        return res.json({ success: true, message: 'OpenAI API key is valid and connected!' });
+      }
+      return res.status(400).json({ success: false, error: data.error?.message || 'OpenAI authentication failed' });
+    } catch (e) {
+      return res.status(500).json({ success: false, error: `Connection failed: ${e.message}` });
+    }
+  }
+
+  // Gemini Test
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${keyToTest}`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    const data = await resp.json();
+
+    if (resp.ok && data.models) {
+      return res.json({
+        success: true,
+        message: 'Google Gemini API key is valid and active!',
+        modelCount: data.models.length
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      error: data.error?.message || 'Gemini authentication failed (Invalid API key)'
+    });
+  } catch (e) {
+    return res.status(500).json({
+      success: false,
+      error: `Network error reaching Google API: ${e.message}`
+    });
+  }
+});
+
 // Vector Search Index Definition Helper for Atlas UI
 router.get('/vector-index-def', (req, res) => {
   const indexDefinition = {
