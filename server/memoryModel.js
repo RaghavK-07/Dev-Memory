@@ -6,7 +6,7 @@
 
 const { ObjectId } = require('mongodb');
 const dbManager = require('./db');
-const { getEmbedding, cosineSimilarity } = require('./embeddings');
+const { getEmbedding, cosineSimilarity, tokenize } = require('./embeddings');
 const { SEED_MEMORIES } = require('./seed');
 
 class MemoryRepository {
@@ -259,14 +259,62 @@ class MemoryRepository {
       }
     }
 
-    // Resilient local cosine similarity retrieval
+    // Resilient local hybrid similarity retrieval (Vector + Lexical/Symbol matching)
     const candidates = await this.listMemories({ workspace, status, types });
+    const qLower = query.toLowerCase().trim();
+    const qTokens = tokenize(query);
+
     const scored = candidates.map(doc => {
-      const score = cosineSimilarity(queryEmbedding, doc.embedding || []);
+      const vectorScore = cosineSimilarity(queryEmbedding, doc.embedding || []);
+
+      // Lexical & Symbol overlap calculation
+      const titleLower = (doc.content?.title || '').toLowerCase();
+      const recLower = (doc.content?.recommendation || '').toLowerCase();
+      const probLower = (doc.content?.problem || '').toLowerCase();
+      const tags = (doc.lifecycle?.tags || []).map(t => t.toLowerCase());
+
+      const fullDocText = `${titleLower} ${recLower} ${probLower} ${tags.join(' ')}`;
+
+      let lexicalScore = 0;
+
+      // 1. Exact phrase / substring match (e.g. "0^0", "timeout 3000ms", "argon2id")
+      if (qLower.length >= 2 && fullDocText.includes(qLower)) {
+        lexicalScore = Math.max(lexicalScore, 0.92);
+      }
+
+      // Check key subphrases and symbol expressions in query (e.g. "0^0", "0**0", "timeout", etc.)
+      const symbolMatches = qLower.match(/[\d\w]+[\^+\-*/%=<>!]+[\d\w]+/g) || [];
+      for (const sm of symbolMatches) {
+        if (fullDocText.includes(sm)) {
+          lexicalScore = Math.max(lexicalScore, 0.95);
+        }
+      }
+
+      // 2. Token overlap ratio
+      if (qTokens.length > 0) {
+        let matchingTokens = 0;
+        for (const token of qTokens) {
+          if (token.length > 1 || /[\d\^+\-*/]/.test(token)) {
+            if (fullDocText.includes(token)) {
+              matchingTokens++;
+            }
+          }
+        }
+        const overlapRatio = matchingTokens / qTokens.length;
+        if (overlapRatio > 0.25) {
+          lexicalScore = Math.max(lexicalScore, Math.min(0.95, overlapRatio * 0.9));
+        }
+      }
+
+      // Combine Vector + Lexical into a robust hybrid relevance score
+      const finalScore = Math.max(vectorScore, lexicalScore, (vectorScore * 0.4 + lexicalScore * 0.6));
+
       return {
         ...doc,
-        relevanceScore: parseFloat(score.toFixed(4)),
-        retrievalMethod: 'resilient_vector_search'
+        relevanceScore: parseFloat(finalScore.toFixed(4)),
+        vectorScore: parseFloat(vectorScore.toFixed(4)),
+        lexicalScore: parseFloat(lexicalScore.toFixed(4)),
+        retrievalMethod: lexicalScore > vectorScore ? 'hybrid_lexical_match' : 'hybrid_vector_search'
       };
     });
 

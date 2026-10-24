@@ -21,13 +21,18 @@ class AgentService {
 
     // STEP 1: ALWAYS READ MONGODB MEMORY FIRST BEFORE ANSWERING
     let recalledMemories = [];
+    let allActiveMemories = [];
     if (!isGreeting) {
+      // 1. Fetch targeted matching memories via hybrid vector + lexical search
       recalledMemories = await memoryRepo.vectorSearch({
         query: queryTrimmed,
         status: 'active',
-        limit: 3,
-        minScore: 0.45
+        limit: 5,
+        minScore: 0.25 // Generous threshold to never miss relevant invariants
       });
+
+      // 2. ALSO fetch all active long-term project invariants from MongoDB Atlas
+      allActiveMemories = await memoryRepo.listMemories({ status: 'active', limit: 15 });
 
       for (const mem of recalledMemories) {
         await memoryRepo.recordRecall(mem._id, sessionId, queryTrimmed, mem.relevanceScore);
@@ -124,20 +129,20 @@ class AgentService {
 
     if (geminiKey) {
       try {
-        agentResponse = await this.callGemini(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory, wasMemoryUpdated);
+        agentResponse = await this.callGemini(queryTrimmed, history, workspace, recalledMemories, allActiveMemories, newlyLearnedMemory, wasMemoryUpdated);
       } catch (err) {
         console.warn('[Agent] Gemini API error, falling back to local reasoning:', err.message);
-        agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory, wasMemoryUpdated);
+        agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, allActiveMemories, newlyLearnedMemory, wasMemoryUpdated);
       }
     } else if (openaiKey) {
       try {
         agentResponse = await this.callOpenAI(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory, wasMemoryUpdated);
       } catch (err) {
         console.warn('[Agent] OpenAI API error, falling back to local reasoning:', err.message);
-        agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory, wasMemoryUpdated);
+        agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, allActiveMemories, newlyLearnedMemory, wasMemoryUpdated);
       }
     } else {
-      agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory, wasMemoryUpdated);
+      agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, allActiveMemories, newlyLearnedMemory, wasMemoryUpdated);
     }
 
     // Check if an invariant altered or rectified this response
@@ -588,7 +593,7 @@ Output pure JSON only.`;
   /**
    * Intelligent local conversational and coding engine
    */
-  async generateIntelligentResponse(query, history = [], workspace, recalledMemories, newlyLearnedMemory, wasMemoryUpdated = false) {
+  async generateIntelligentResponse(query, history = [], workspace, recalledMemories = [], allActiveMemories = [], newlyLearnedMemory, wasMemoryUpdated = false) {
     const qLower = query.toLowerCase().trim();
 
     // Check if previous turn was asking for optimization/review and user just provided code
@@ -851,9 +856,25 @@ app.use(cors({
 If your requests use cookies or \`Authorization\` headers, ensure \`credentials: true\` is set on both server and client fetch (\`credentials: 'include'\`).`;
     }
 
-    // 7. Simple Math & Expressions
+    // 7. Simple Math & Expressions (Honoring MongoDB Math Invariants)
     if (/^[\d\s+\-*/().%^]+$/.test(qLower) && /\d/.test(qLower)) {
       try {
+        let expr = qLower;
+        // Check if a stored memory specifies a rule for 0^0 or other math invariants
+        const combined = (recalledMemories || []).concat(allActiveMemories || []);
+        const zeroPowerRule = combined.find(m => 
+          (m.content?.title?.toLowerCase().includes('0^0') || m.content?.recommendation?.toLowerCase().includes('power of 0')) &&
+          m.content?.recommendation?.includes('0')
+        );
+
+        if (zeroPowerRule) {
+          // In JavaScript/Python, 0**0 evaluates to 1 by default, but our project memory mandates 0^0 = 0!
+          expr = expr.replace(/0\s*[\^]\s*0/g, '0').replace(/0\s*\*\*\s*0/g, '0');
+          const sanitized = expr.replace(/[^-()\d/*+.]/g, '');
+          const result = Function(`'use strict'; return (${sanitized})`)();
+          return `Applying mandated project invariant (**${zeroPowerRule.content.title}**):\n\n> *${zeroPowerRule.content.recommendation}*\n\n${query} = **${result}** (where $0^0 = 0$ as established in MongoDB memory).`;
+        }
+
         const sanitized = qLower.replace(/[^-()\d/*+.]/g, '');
         const result = Function(`'use strict'; return (${sanitized})`)();
         return `${query} = **${result}**`;
@@ -912,17 +933,26 @@ For example:
   /**
    * Gemini API integration with multi-turn session working memory
    */
-  async callGemini(query, history = [], workspace, memories, newlyLearnedMemory, wasMemoryUpdated = false) {
+  async callGemini(query, history = [], workspace, memories = [], allActiveMemories = [], newlyLearnedMemory, wasMemoryUpdated = false) {
     const memoryDirectives = memories.map(m => 
-      `- INVARIANT (${m.type.toUpperCase()}): "${m.content.title}". Mandated Rule: ${m.content.recommendation}. Past Failure to Avoid: ${m.content.outcome || m.content.problem}`
+      `- TARGETED INVARIANT [${m.type.toUpperCase()}]: "${m.content.title}". Mandated Rule: ${m.content.recommendation}. Context/Failure: ${m.content.outcome || m.content.problem}`
     ).join('\n\n');
+
+    const otherInvariants = (allActiveMemories || [])
+      .filter(m => !memories.some(rm => rm._id.toString() === m._id.toString()))
+      .map(m => `- PROJECT INVARIANT [${m.type.toUpperCase()}]: "${m.content.title}" -> Mandated Rule: ${m.content.recommendation}`)
+      .join('\n');
 
     const systemPrompt = `You are DevMemory, a professional senior software engineer and AI pair programmer with persistent MongoDB memory.
 
 CRITICAL INSTRUCTIONS:
-1. READ AND ENFORCE MONGODB LONG-TERM MEMORY:
-Before answering, you MUST read the following project invariants retrieved from MongoDB Atlas and strictly adhere to them. Automatically apply these rules directly into the code and architecture you generate:
-${memoryDirectives || 'No matching invariants found in MongoDB for this query.'}
+1. READ AND ENFORCE MONGODB LONG-TERM MEMORY BEFORE ANSWERING:
+You MUST check the project invariants stored in MongoDB Atlas and strictly answer according to them.
+If an invariant defines a specific rule (including mathematical edge cases like "0^0 = 0", framework constraints, or security policies), YOU MUST STRICTLY ENFORCE THE MONGODB INVARIANT OVER STANDARD TEXTBOOK DEFAULTS OR CONVENTIONS.
+
+${memoryDirectives ? `TARGETED MATCHING INVARIANTS FROM MONGODB:\n${memoryDirectives}\n` : ''}
+${otherInvariants ? `ALL ACTIVE PROJECT INVARIANTS IN MONGODB:\n${otherInvariants}\n` : ''}
+${(!memoryDirectives && !otherInvariants) ? 'No active invariants found in MongoDB for this query.' : ''}
 
 ${newlyLearnedMemory ? `2. ${wasMemoryUpdated ? 'UPDATED' : 'NEWLY COMMITTED'} PROJECT MEMORY:
 You just automatically ${wasMemoryUpdated ? 'updated the existing invariant in' : 'committed this new invariant to'} persistent MongoDB memory:
@@ -934,7 +964,7 @@ Acknowledge that this rule was ${wasMemoryUpdated ? 'updated in' : 'committed to
 3. SHORT-TERM WORKING MEMORY:
 Maintain full conversational context across prior prompt turns in this session.
 
-Be helpful, direct, conversational, and provide clean, working, optimized code when requested.`;
+Always explicitly state when a MongoDB memory invariant guided your calculation or code!`;
 
     const contents = [];
 

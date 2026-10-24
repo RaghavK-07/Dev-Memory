@@ -48,14 +48,14 @@ function hashString(str, seed = 0) {
 
 /**
  * Tokenize and normalize text
+ * Preserves alphanumeric words, numbers, and key coding/math operators (^, +, -, *, /, =, <, >)
  */
 function tokenize(text) {
   if (!text) return [];
-  return text
-    .toLowerCase()
-    .replace(/[^\w\s-]/g, ' ')
-    .split(/\s+/)
-    .filter(token => token.length > 1);
+  const normalized = text.toLowerCase();
+  const matches = normalized.match(/[\w]+|[\^+\-*/%=<>!&|]+/g);
+  if (!matches) return [];
+  return matches.filter(token => token.trim().length > 0);
 }
 
 /**
