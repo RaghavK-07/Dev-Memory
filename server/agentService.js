@@ -286,7 +286,7 @@ class AgentService {
   async extractMemoryWithLLM(query, history = [], workspace) {
     if (!process.env.GEMINI_API_KEY) return null;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${process.env.GEMINI_API_KEY}`;
     const prompt = `Analyze if this developer chat message sets a permanent project rule, architectural constraint, coding convention, or bug post-mortem/fix to remember for workspace "${workspace}".
 
 Message: "${query}"
@@ -310,7 +310,7 @@ Output pure JSON only.`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(2500),
+      signal: AbortSignal.timeout(12000),
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig: {
@@ -715,15 +715,20 @@ Be helpful, direct, conversational, and provide clean, working, optimized code w
       parts: [{ text: query }]
     });
 
-    const models = ['gemini-flash-latest'];
+    const models = [
+      'gemini-3-flash-preview',
+      'gemini-flash-latest',
+      'gemini-3.8-flash'
+    ];
 
     for (const model of models) {
       try {
+        const t0 = Date.now();
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
         const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(3500),
+          signal: AbortSignal.timeout(28000),
           body: JSON.stringify({
             systemInstruction: {
               parts: [{ text: systemPrompt }]
@@ -735,6 +740,7 @@ Be helpful, direct, conversational, and provide clean, working, optimized code w
         const data = await res.json();
         const candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text;
         if (candidateText) {
+          console.log(`[Gemini] Live model ${model} responded successfully in ${Date.now() - t0}ms`);
           return candidateText;
         }
 
@@ -742,10 +748,11 @@ Be helpful, direct, conversational, and provide clean, working, optimized code w
           console.warn(`[Gemini] Model ${model} returned error:`, data.error.message);
         }
       } catch (err) {
-        console.warn(`[Gemini] Live API call unavailable (${err.message}), falling back to instant local intelligence engine`);
+        console.warn(`[Gemini] Model ${model} error (${err.message})`);
       }
     }
 
+    console.log('[Agent] Falling back to intelligent local coding engine');
     return this.generateIntelligentResponse(query, history, workspace, memories, newlyLearnedMemory);
   }
 

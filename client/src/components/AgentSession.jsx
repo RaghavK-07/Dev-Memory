@@ -247,9 +247,9 @@ I work like a standard coding assistant, but with **persistent memory in MongoDB
         ))}
 
         {isSubmitting && (
-          <div className="flex items-center gap-2 text-slate-400 text-xs font-mono p-2">
-            <div className="w-3.5 h-3.5 border-2 border-slate-700 border-t-transparent rounded-full animate-spin"></div>
-            <span>Checking persistent memories in MongoDB Atlas...</span>
+          <div className="flex items-center gap-2.5 text-slate-600 text-xs font-mono p-3 bg-slate-50 border border-slate-200/80 rounded-lg">
+            <div className="w-3.5 h-3.5 border-2 border-slate-800 border-t-transparent rounded-full animate-spin"></div>
+            <span>Reasoning with Gemini & checking persistent memory in MongoDB Atlas...</span>
           </div>
         )}
       </div>
@@ -269,31 +269,43 @@ I work like a standard coding assistant, but with **persistent memory in MongoDB
         ))}
       </div>
 
-      {/* Input Form */}
+      {/* Input Form with Multiline Prompting */}
       <div className="p-3.5 bg-white border-t border-slate-200">
         <form
           onSubmit={(e) => {
             e.preventDefault();
             handleSend();
           }}
-          className="flex items-center gap-2"
+          className="flex flex-col gap-1.5"
         >
-          <input
-            type="text"
-            value={inputQuery}
-            onChange={(e) => setInputQuery(e.target.value)}
-            placeholder={`Ask DevMemory anything or say "Remember that..." to teach a rule...`}
-            disabled={isSubmitting}
-            className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-900 focus:bg-white transition"
-          />
-          <button
-            type="submit"
-            disabled={isSubmitting || !inputQuery.trim()}
-            className="px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs transition flex items-center gap-1.5 disabled:opacity-40"
-          >
-            <Send className="w-3.5 h-3.5" />
-            <span>Send</span>
-          </button>
+          <div className="flex items-end gap-2">
+            <textarea
+              rows={2}
+              value={inputQuery}
+              onChange={(e) => setInputQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder={`Ask DevMemory anything, paste code, or say "Remember that..." to teach a rule... (Shift+Enter for newline)`}
+              disabled={isSubmitting}
+              className="flex-1 min-h-[52px] max-h-[160px] resize-y bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-900 focus:bg-white transition leading-relaxed"
+            />
+            <button
+              type="submit"
+              disabled={isSubmitting || !inputQuery.trim()}
+              className="h-[52px] px-4 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-40 flex-shrink-0 shadow-sm"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>Send</span>
+            </button>
+          </div>
+          <div className="flex items-center justify-between px-1 text-[10px] text-slate-400">
+            <span>Press <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-600 font-mono">Enter ↵</kbd> to send, <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-600 font-mono">Shift + Enter</kbd> for new line</span>
+            <span>Workspace: <strong className="text-slate-600 font-mono">{workspace}</strong></span>
+          </div>
         </form>
       </div>
 
