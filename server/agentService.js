@@ -52,23 +52,24 @@ class AgentService {
         workspace: primaryFail.workspace
       };
 
-      agentResponse = `### ⚠️ DevMemory Alert: Avoid Prior Failed Fix!
+      agentResponse = `### Known Failure Invariant Detected
 
-I retrieved **Memory \`#${primaryFail._id.toString().slice(-6)}\`** from workspace **\`${primaryFail.workspace}\`** (Relevance: **${(primaryFail.relevanceScore * 100).toFixed(1)}%**).
+Recalled memory \`#${primaryFail._id.toString().slice(-6)}\` in \`${primaryFail.workspace}\` (${(primaryFail.relevanceScore * 100).toFixed(1)}% match).
 
-> **Prior Failure Recorded:**
-> In a previous session, we attempted:
-> \`${primaryFail.content.attemptedFix}\`
-> ❌ **Why it failed:** ${primaryFail.content.outcome}
+**Prior Failed Approach:**
+${primaryFail.content.attemptedFix}
+
+**Failure Reason:**
+${primaryFail.content.outcome}
 
 ---
 
-###  Recommended Safe Architecture:
+### Verified Architecture:
 ${primaryFail.content.recommendation}
 
 ${primaryFail.content.codeSnippet ? `\`\`\`typescript\n${primaryFail.content.codeSnippet}\n\`\`\`` : ''}
 
-**Key Invariant:** Never let client clocks or requests dictate cryptographic token signatures. Always issue opaque refresh tokens or server-side sliding sessions.`;
+**Constraint:** Do not allow client-side timestamp extensions. Enforce server-managed session rotation.`;
 
     } else if (constraints.length > 0) {
       const topConstraint = constraints[0];
@@ -81,28 +82,28 @@ ${primaryFail.content.codeSnippet ? `\`\`\`typescript\n${primaryFail.content.cod
         score: topConstraint.relevanceScore
       };
 
-      agentResponse = `### 🔒 Project Constraint Enforced: ${topConstraint.content.title}
+      agentResponse = `### Project Constraint Enforced: ${topConstraint.content.title}
 
-Recalled active constraint **\`#${topConstraint._id.toString().slice(-6)}\`** (Relevance: **${(topConstraint.relevanceScore * 100).toFixed(1)}%**):
+Recalled active constraint \`#${topConstraint._id.toString().slice(-6)}\` (${(topConstraint.relevanceScore * 100).toFixed(1)}% match):
 
 > ${topConstraint.content.recommendation}
 
 ${topConstraint.content.codeSnippet ? `\`\`\`typescript\n${topConstraint.content.codeSnippet}\n\`\`\`` : ''}
 
-All code generated for **\`${workspace}\`** automatically complies with this rule.`;
+This workspace mandates compliance with this invariant.`;
 
     } else {
       // General response when no specific constraint/failed_fix triggers
-      agentResponse = `### DevMemory Analysis for \`${workspace}\`
+      agentResponse = `### Analysis for \`${workspace}\`
 
-No prior failures or blocking constraints matched your query with high confidence.
+No prior failures or active constraints matched this query.
 
-**General Guidance for:** "${query}"
-- Follow standardized modular patterns.
+**Recommendation for:** "${query}"
+- Follow modular service boundaries.
 - Ensure all async handlers handle uncaught rejections.
 - Maintain idempotency and audit logs for sensitive operations.
 
-*(DevMemory is monitoring this interaction. If a chosen solution fails tests or review, record it to ensure the agent never suggests it again.)*`;
+*Note: If an implementation fails tests or review, use "Record Bug / Rule" to persist the outcome into MongoDB.*`;
     }
 
     return {
