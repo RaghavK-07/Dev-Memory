@@ -1,0 +1,24 @@
+{
+  "name": "dev-memory",
+  "version": "1.0.0",
+  "description": "DevMemory — The coding agent that learns from mistakes with persistent MongoDB vector memory, TTL expiry, and live change streams",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "server": "node server/index.js",
+    "client": "npm --prefix client run dev",
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "build": "npm --prefix client run build",
+    "seed": "node server/seed.js",
+    "test-connection": "node server/test-connection.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "mongodb": "^6.10.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

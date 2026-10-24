@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+client/node_modules/
+
+# Environment variables & Secrets (CRITICAL)
+.env
+.env.local
+*.env
+
+# Build outputs
+client/dist/
+dist/
+
+# OS and editor files
+.DS_Store
+client/.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
