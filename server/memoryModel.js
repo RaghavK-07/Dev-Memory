@@ -149,6 +149,10 @@ class MemoryRepository {
     return this.localStore.find(m => m._id.toString() === strId) || null;
   }
 
+  async getMemory(id) {
+    return this.getById(id);
+  }
+
   /**
    * List memories with metadata filters
    */
@@ -332,6 +336,143 @@ class MemoryRepository {
       operationType: hard ? 'delete' : 'update',
       documentId: strId
     });
+  }
+
+  /**
+   * Update an existing memory document and refresh its vector embedding
+   */
+  async updateMemory(id, updates) {
+    const strId = id.toString();
+    const now = new Date();
+
+    let doc = await this.getById(id);
+    if (!doc) return null;
+
+    // Merge content
+    if (updates.content) {
+      doc.content = {
+        ...doc.content,
+        ...updates.content,
+        title: updates.content.title || doc.content.title,
+        recommendation: updates.content.recommendation || doc.content.recommendation,
+        problem: updates.content.problem || doc.content.problem
+      };
+    }
+    if (updates.type) doc.type = updates.type;
+    if (updates.lifecycle) {
+      doc.lifecycle = {
+        ...doc.lifecycle,
+        ...updates.lifecycle,
+        tags: Array.from(new Set([...(doc.lifecycle?.tags || []), ...(updates.lifecycle?.tags || [])]))
+      };
+    }
+    doc.updatedAt = now;
+
+    // Recalculate 384-dimensional vector embedding with updated content
+    const textToEmbed = [
+      doc.content.title || '',
+      doc.content.problem || '',
+      doc.content.recommendation || '',
+      (doc.lifecycle?.tags || []).join(' ')
+    ].join(' ').trim();
+    doc.embedding = await getEmbedding(textToEmbed);
+
+    // Update in localStore
+    const idx = this.localStore.findIndex(m => m._id.toString() === strId);
+    if (idx !== -1) {
+      this.localStore[idx] = doc;
+    }
+
+    // Update in Atlas
+    if (this.isLiveAtlas) {
+      try {
+        await this.collection.updateOne(
+          { _id: new ObjectId(strId) },
+          {
+            $set: {
+              content: doc.content,
+              type: doc.type,
+              lifecycle: doc.lifecycle,
+              embedding: doc.embedding,
+              updatedAt: now
+            }
+          }
+        );
+      } catch (err) {
+        console.warn('[MongoDB Atlas] Update warning:', err.message);
+      }
+    }
+
+    dbManager.emit('memory_change', {
+      operationType: 'update',
+      documentId: strId,
+      fullDocument: doc
+    });
+
+    console.log(`[MemoryRepo] Updated existing memory document: "${doc.content.title}" (#${strId.slice(-6)})`);
+    return doc;
+  }
+
+  /**
+   * Deduplicate: If an existing memory is closely related (similarity >= 0.68),
+   * update it instead of creating an annoying duplicate!
+   */
+  async upsertOrMergeMemory(data) {
+    let targetMemory = null;
+
+    // 1. If an explicit target memory ID was passed (e.g. from an override flow)
+    if (data.targetMemoryId) {
+      targetMemory = await this.getMemory(data.targetMemoryId);
+    }
+
+    // 2. Otherwise search for an existing related memory via vector search
+    if (!targetMemory) {
+      const textToMatch = [
+        data.content?.title || '',
+        data.content?.recommendation || ''
+      ].join(' ').trim();
+
+      const matches = await this.vectorSearch({
+        query: textToMatch,
+        status: 'active',
+        limit: 1,
+        minScore: data.isOverride ? 0.45 : 0.68
+      });
+
+      if (matches && matches.length > 0) {
+        targetMemory = matches[0];
+      }
+    }
+
+    if (targetMemory) {
+      console.log(`[MemoryRepo] Found existing related memory (#${targetMemory._id.toString().slice(-6)} - "${targetMemory.content.title}"). Updating to prevent redundancy.`);
+
+      const isOverride = data.isOverride || (data.lifecycle?.tags || []).includes('updated-rule');
+      const updatedRecommendation = isOverride
+        ? data.content.recommendation
+        : (data.content?.recommendation && data.content.recommendation !== targetMemory.content.recommendation
+          ? `${targetMemory.content.recommendation} | Updated rule: ${data.content.recommendation}`
+          : targetMemory.content.recommendation);
+
+      const updated = await this.updateMemory(targetMemory._id, {
+        content: {
+          title: isOverride && data.content?.title ? data.content.title : targetMemory.content.title,
+          problem: isOverride && data.content?.problem ? data.content.problem : targetMemory.content.problem,
+          recommendation: updatedRecommendation,
+          codeSnippet: data.content?.codeSnippet || targetMemory.content.codeSnippet
+        },
+        type: data.type || targetMemory.type,
+        lifecycle: {
+          tags: data.lifecycle?.tags || []
+        }
+      });
+
+      return { memory: updated, isUpdated: true, existingId: targetMemory._id };
+    }
+
+    // If no existing related memory, create a new one
+    const created = await this.createMemory(data);
+    return { memory: created, isUpdated: false };
   }
 }
 

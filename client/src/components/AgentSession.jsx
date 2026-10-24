@@ -78,6 +78,7 @@ export default function AgentSession({
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           autoRectification: data.autoRectification,
           newlyLearnedMemory: data.newlyLearnedMemory,
+          wasMemoryUpdated: data.wasMemoryUpdated,
           recalledMemories: data.recalledMemories || []
         };
         setMessages(prev => [...prev, agentMsg]);
@@ -158,7 +159,7 @@ export default function AgentSession({
                     <Database className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
                     <div>
                       <span className="font-semibold text-[11px] block text-emerald-800">
-                        Committed to Long-Term Memory (MongoDB Atlas)
+                        {msg.wasMemoryUpdated ? 'Updated Long-Term Memory (MongoDB Atlas)' : 'Committed to Long-Term Memory (MongoDB Atlas)'}
                       </span>
                       <span className="text-[11px] text-emerald-950 font-medium">
                         "{msg.newlyLearnedMemory.content.title}"

@@ -19,50 +19,8 @@ class AgentService {
     const queryLower = queryTrimmed.toLowerCase();
     const isGreeting = this.isSimpleGreeting(queryLower);
 
-    // 1. Detect if the user explicitly conveyed an invariant, rule, decision, or bug to remember
-    let autoLearn = !isGreeting ? this.detectLearningIntent(queryTrimmed, workspace) : null;
-
-    // If rule-based didn't trigger, and LLM is enabled, check with smart LLM classifier
-    if (!autoLearn && !isGreeting && process.env.GEMINI_API_KEY && this.couldBeMemoryCandidate(queryTrimmed)) {
-      try {
-        autoLearn = await this.extractMemoryWithLLM(queryTrimmed, history, workspace);
-      } catch (err) {
-        console.warn('[Agent] LLM memory extraction note:', err.message);
-      }
-    }
-
-    let newlyLearnedMemory = null;
-
-    if (autoLearn) {
-      newlyLearnedMemory = await memoryRepo.createMemory({
-        owner: role,
-        workspace: 'default',
-        type: autoLearn.type || 'constraint',
-        content: {
-          title: autoLearn.title || 'Project Invariant',
-          problem: autoLearn.problem || `Constraint: "${queryTrimmed}"`,
-          attemptedFix: autoLearn.attemptedFix || '',
-          outcome: autoLearn.outcome || '',
-          recommendation: autoLearn.recommendation || queryTrimmed,
-          codeSnippet: autoLearn.codeSnippet || ''
-        },
-        source: {
-          sessionId,
-          channel: 'conversational_learning',
-          author: role
-        },
-        lifecycle: {
-          status: 'active',
-          confidence: 1.0,
-          tags: autoLearn.tags || ['long-term-memory']
-        }
-      });
-    }
-
-    // 2. Query MongoDB Vector Search for relevant long-term memories
-    // (Only query vector search if it's not a simple greeting)
+    // STEP 1: ALWAYS READ MONGODB MEMORY FIRST BEFORE ANSWERING
     let recalledMemories = [];
-
     if (!isGreeting) {
       recalledMemories = await memoryRepo.vectorSearch({
         query: queryTrimmed,
@@ -76,7 +34,87 @@ class AgentService {
       }
     }
 
-    // 3. Generate response with multi-turn short-term working memory
+    // STEP 2: CHECK FOR MEMORY CANDIDATES & EXPLICIT UPDATES
+    // Only store when the user establishes a rule, invariant, constraint, or bug fix.
+    let memoryCandidate = !isGreeting ? this.detectLearningIntent(queryTrimmed, workspace) : null;
+
+    // STEP 3: CONTRADICTION DETECTION
+    // If the user's prompt directly contradicts a stored memory, ask the user about it,
+    // UNLESS the user is explicitly commanding to update/override the rule!
+    if (!memoryCandidate || !memoryCandidate.isOverride) {
+      const conflict = this.detectMemoryContradiction(queryTrimmed, recalledMemories);
+      if (conflict) {
+        return {
+          sessionId,
+          query: queryTrimmed,
+          timestamp,
+          response: this.formatContradictionResponse(conflict),
+          autoRectification: {
+            memoryId: conflict.memory._id,
+            type: 'conflict',
+            title: conflict.memory.content.title,
+            rectification: `Contradiction detected: prompt opposes established rule "${conflict.memory.content.recommendation}"`,
+            score: conflict.memory.relevanceScore
+          },
+          newlyLearnedMemory: null,
+          recalledMemories: recalledMemories.map(m => ({
+            id: m._id,
+            type: m.type,
+            title: m.content.title,
+            relevanceScore: m.relevanceScore,
+            recommendation: m.content.recommendation,
+            status: m.lifecycle.status,
+            recallsCount: (m.recallStats?.recallsCount || 0) + 1
+          }))
+        };
+      }
+    }
+
+    if (!memoryCandidate && !isGreeting && process.env.GEMINI_API_KEY && this.couldBeMemoryCandidate(queryTrimmed)) {
+      try {
+        memoryCandidate = await this.extractMemoryWithLLM(queryTrimmed, history, workspace);
+      } catch (err) {
+        console.warn('[Agent] LLM memory extraction note:', err.message);
+      }
+    }
+
+    let newlyLearnedMemory = null;
+    let wasMemoryUpdated = false;
+
+    if (memoryCandidate) {
+      // Upsert / Merge to prevent redundancies in MongoDB
+      const result = await memoryRepo.upsertOrMergeMemory({
+        owner: role,
+        workspace: 'default',
+        type: memoryCandidate.type || 'constraint',
+        isOverride: memoryCandidate.isOverride || false,
+        targetMemoryId: (memoryCandidate.isOverride && recalledMemories.length > 0) ? recalledMemories[0]._id : undefined,
+        content: {
+          title: memoryCandidate.title || 'Project Invariant',
+          problem: memoryCandidate.problem || `Constraint: "${queryTrimmed}"`,
+          attemptedFix: memoryCandidate.attemptedFix || '',
+          outcome: memoryCandidate.outcome || '',
+          recommendation: memoryCandidate.recommendation || queryTrimmed,
+          codeSnippet: memoryCandidate.codeSnippet || ''
+        },
+        source: {
+          sessionId,
+          channel: 'conversational_learning',
+          author: role
+        },
+        lifecycle: {
+          status: 'active',
+          confidence: 1.0,
+          tags: memoryCandidate.tags || ['long-term-memory']
+        }
+      });
+
+      newlyLearnedMemory = result.memory;
+      wasMemoryUpdated = result.isUpdated;
+    }
+
+    // STEP 4: GENERATE ANSWER ACCORDING TO STORED MEMORIES
+    // (Injecting recalled memories into Gemini / local reasoning)
     let agentResponse = '';
     let autoRectification = null;
 
@@ -86,34 +124,24 @@ class AgentService {
 
     if (geminiKey) {
       try {
-        agentResponse = await this.callGemini(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory);
+        agentResponse = await this.callGemini(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory, wasMemoryUpdated);
       } catch (err) {
         console.warn('[Agent] Gemini API error, falling back to local reasoning:', err.message);
-        agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory);
+        agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory, wasMemoryUpdated);
       }
     } else if (openaiKey) {
       try {
-        agentResponse = await this.callOpenAI(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory);
+        agentResponse = await this.callOpenAI(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory, wasMemoryUpdated);
       } catch (err) {
         console.warn('[Agent] OpenAI API error, falling back to local reasoning:', err.message);
-        agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory);
+        agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory, wasMemoryUpdated);
       }
     } else {
-      agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory);
-    }
-
-    // 4. Long-Term Memory: Commit selected content to MongoDB on every chat interaction
-    if (!newlyLearnedMemory && !isGreeting && queryTrimmed.length > 5) {
-      newlyLearnedMemory = await this.distillAndStoreLongTermMemory({
-        query: queryTrimmed,
-        response: agentResponse,
-        sessionId,
-        role
-      });
+      agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory, wasMemoryUpdated);
     }
 
     // Check if an invariant altered or rectified this response
-    if (recalledMemories.length > 0) {
+    if (recalledMemories.length > 0 && !newlyLearnedMemory) {
       const topMemory = recalledMemories[0];
       autoRectification = {
         memoryId: topMemory._id,
@@ -131,6 +159,7 @@ class AgentService {
       response: agentResponse,
       autoRectification,
       newlyLearnedMemory,
+      wasMemoryUpdated,
       recalledMemories: recalledMemories.map(m => ({
         id: m._id,
         type: m.type,
@@ -144,57 +173,91 @@ class AgentService {
   }
 
   /**
-   * Distill and commit key insights from every chat interaction to MongoDB long-term memory
+   * Contradiction Detection: Check if the user's prompt opposes a stored memory
    */
-  async distillAndStoreLongTermMemory({ query, response, sessionId, role = 'developer' }) {
-    try {
-      const q = query.trim();
-      const cleanResponse = (response || '')
-        .replace(/```[\s\S]*?```/g, '') // remove code blocks for distillation
-        .replace(/[#*`>]/g, '')
-        .trim();
+  detectMemoryContradiction(query, recalledMemories) {
+    if (!recalledMemories || recalledMemories.length === 0) return null;
+    const qLower = query.toLowerCase();
 
-      const sentences = cleanResponse.split(/(?<=[.?!])\s+/).filter(s => s.length > 15);
-      const summary = sentences.slice(0, 2).join(' ').trim() || cleanResponse.slice(0, 160);
+    for (const mem of recalledMemories) {
+      const recLower = (mem.content?.recommendation || '').toLowerCase();
+      const titleLower = (mem.content?.title || '').toLowerCase();
 
-      // Create a readable title
-      let title = q.replace(/[?!.]/g, '').trim();
-      title = title.replace(/^(write a|write an|how to|how do we|how should i|explain|what is|tell me about)\s+/i, '');
-      title = title.charAt(0).toUpperCase() + title.slice(1);
-      if (title.length > 50) {
-        title = title.slice(0, 47) + '...';
+      // Contradiction 1: Password Hashing
+      // If memory mandates Argon2id, but user asks for SHA-256, MD5, or plain bcrypt
+      if (recLower.includes('argon2') || titleLower.includes('argon2')) {
+        if (qLower.includes('md5') || qLower.includes('sha256') || qLower.includes('sha-256') || (qLower.includes('bcrypt') && !recLower.includes('bcrypt'))) {
+          return {
+            memory: mem,
+            conflictType: 'password_hashing',
+            userAction: query.trim(),
+            existingRule: mem.content.recommendation
+          };
+        }
       }
 
-      const doc = await memoryRepo.createMemory({
-        owner: role,
-        workspace: 'default',
-        type: 'pattern',
-        content: {
-          title: `Insight: ${title}`,
-          problem: `Chat discussion: "${q}"`,
-          attemptedFix: '',
-          outcome: 'Stored from live chat session',
-          recommendation: summary || `Standard solution for: ${q}`,
-          codeSnippet: ''
-        },
-        source: {
-          sessionId,
-          channel: 'chat_extraction',
-          author: role
-        },
-        lifecycle: {
-          status: 'active',
-          confidence: 0.95,
-          tags: ['long-term-memory', 'auto-extracted']
+      // Contradiction 2: JWT Storage
+      // If memory mandates HttpOnly cookies and prohibits localStorage, but user asks for localStorage
+      if (recLower.includes('httponly') || recLower.includes('cookie') || titleLower.includes('jwt')) {
+        if (qLower.includes('localstorage') || qLower.includes('local storage')) {
+          return {
+            memory: mem,
+            conflictType: 'jwt_storage',
+            userAction: 'Store tokens in browser localStorage',
+            existingRule: mem.content.recommendation
+          };
         }
-      });
+      }
 
-      console.log(`[LongTermMemory] Saved to MongoDB Atlas: "${doc.content.title}"`);
-      return doc;
-    } catch (err) {
-      console.warn('[LongTermMemory] Distillation note:', err.message);
-      return null;
+      // Contradiction 3: Database Query Timeout
+      const timeoutMatch = recLower.match(/(\d+)\s*ms/);
+      if (timeoutMatch && qLower.includes('timeout')) {
+        const userTimeoutMatch = qLower.match(/(\d+)\s*ms/);
+        if (userTimeoutMatch && userTimeoutMatch[1] !== timeoutMatch[1]) {
+          return {
+            memory: mem,
+            conflictType: 'timeout_value',
+            userAction: `Set database timeout to ${userTimeoutMatch[1]}ms`,
+            existingRule: mem.content.recommendation
+          };
+        }
+      }
+
+      // Contradiction 4: Currency Float Math
+      if (recLower.includes('cent') || recLower.includes('integer') || titleLower.includes('float')) {
+        if (qLower.includes('float') || qLower.match(/price\s*\*\s*0\.\d+/)) {
+          return {
+            memory: mem,
+            conflictType: 'currency_math',
+            userAction: 'Use floating-point arithmetic for currency calculations',
+            existingRule: mem.content.recommendation
+          };
+        }
+      }
     }
+
+    return null;
+  }
+
+  /**
+   * Format friendly conflict resolution dialog
+   */
+  formatContradictionResponse(conflict) {
+    return `### ⚠️ Memory Conflict Detected
+
+We have a previously established rule stored in **MongoDB Atlas**:
+
+> **Stored Invariant:** "${conflict.memory.content.title}"  
+> **Enforced Rule:** *${conflict.existingRule}*
+
+However, your prompt suggests:
+> **Requested Action:** *${conflict.userAction}*
+
+---
+
+### How would you like to proceed?
+1. **Adhere to the existing memory**: I will write the solution following our established invariant (*${conflict.existingRule}*).
+2. **Update the memory**: If the project standard has officially changed, reply with *"Update the rule to: [new requirement]"*, and I will update our MongoDB document accordingly so future answers follow the new standard.`;
   }
 
   /**
@@ -216,6 +279,21 @@ class AgentService {
   detectLearningIntent(query, workspace) {
     const q = query.trim();
     const lower = q.toLowerCase();
+
+    // 0. Explicit Memory Update / Modification: "update the rule to...", "change the memory to...", "override the rule with..."
+    const updateRegex = /^(?:please\s+)?(?:update|change|override|modify|replace)\s+(?:the\s+)?(?:rule|memory|invariant|standard|policy)?(?:\s*(?:to|with|by))?[:\s]+\s*(.*)/i;
+    const updateMatch = q.match(updateRegex);
+    if (updateMatch && updateMatch[1]) {
+      const newRuleText = updateMatch[1].trim();
+      return {
+        type: 'constraint',
+        title: this.formatTitle(newRuleText),
+        problem: `Updated project rule: "${q}"`,
+        recommendation: newRuleText,
+        tags: ['long-term-memory', 'updated-rule'],
+        isOverride: true
+      };
+    }
 
     // 1. Explicit triggers: "remember that...", "note that...", "rule:...", "from now on..."
     const triggerMatch = lower.match(/(?:remember\s+(?:that)?|keep\s+in\s+mind\s+(?:that)?|note\s+(?:that)?|from\s+now\s+on,?\s*|new\s+rule:?|rule:?|invariant:?)\s*(.*)/i);
@@ -347,7 +425,7 @@ class AgentService {
   async extractMemoryWithLLM(query, history = [], workspace) {
     if (!process.env.GEMINI_API_KEY) return null;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
     const prompt = `Analyze if this developer chat message sets a permanent project rule, architectural constraint, coding convention, or bug post-mortem/fix to remember for workspace "${workspace}".
 
 Message: "${query}"
@@ -405,7 +483,7 @@ Output pure JSON only.`;
   /**
    * Intelligent local conversational and coding engine
    */
-  async generateIntelligentResponse(query, history = [], workspace, recalledMemories, newlyLearnedMemory) {
+  async generateIntelligentResponse(query, history = [], workspace, recalledMemories, newlyLearnedMemory, wasMemoryUpdated = false) {
     const qLower = query.toLowerCase().trim();
 
     // Check if previous turn was asking for optimization/review and user just provided code
@@ -428,26 +506,28 @@ ${query}
 
     // 1. Newly learned memory confirmation
     if (newlyLearnedMemory) {
-      return `I have saved this invariant to my memory for **\`${workspace}\`**:
+      return `I have ${wasMemoryUpdated ? 'updated the existing invariant in' : 'saved this invariant to'} our persistent memory in **MongoDB Atlas**:
 
 > **Rule:** "${newlyLearnedMemory.content.title}"
-> **Persistence:** Indexed in MongoDB Atlas vector graph.
+> **Mandated Recommendation:** *${newlyLearnedMemory.content.recommendation}*
+> **Database:** Indexed in MongoDB Atlas vector graph.
 
-Whenever this issue or context is encountered again, I will automatically rectify the code and adhere to this rule.`;
+${wasMemoryUpdated ? 'The prior memory document was updated to prevent duplicate entries.' : 'Whenever this issue or context is encountered again in future chats, I will automatically rectify the code and adhere strictly to this rule.'}`;
     }
 
     // 2. Greetings and pleasantries
     if (this.isSimpleGreeting(qLower)) {
-      const activeCount = await memoryRepo.listMemories({ workspace, status: 'active' });
-      return `Hello! I am **DevMemory**, your AI coding assistant for **\`${workspace}\`**.
+      const activeCount = await memoryRepo.listMemories({ status: 'active' });
+      return `Hello! I am **DevMemory**, your AI coding assistant with persistent **MongoDB Long-Term Memory**.
 
-I currently have **${activeCount.length} active memory invariants** indexed in MongoDB for this workspace.
+I currently have **${activeCount.length} active memory invariants** stored in MongoDB Atlas.
 
-Here is what I can do for you:
-- **Write and review code** across TypeScript, Python, Go, SQL, React, and Node.js
-- **Debug errors and explain architectures**
-- **Persist learnings**: Whenever a bug fix fails or a constraint changes, tell me *"Remember that..."* and I will never repeat that mistake.
-- **Auto-rectify**: If an issue touches a prior failure (e.g. token expiration, floating-point math, idempotency), I will automatically write the rectified, verified solution.
+Here is what I can do:
+- **Write and review code** across TypeScript, Python, Go, SQL, React, and Node.js.
+- **Maintain short-term memory**: I remember our active conversation turns.
+- **Enforce long-term invariants**: Before answering any question, I read our MongoDB memories and automatically apply our established rules.
+- **Prevent mistakes**: If a fix failed in the past, I will never repeat it.
+- **Detect contradictions**: If your prompt opposes an existing memory, I will ask you whether to adhere to it or update the rule.
 
 What would you like to work on?`;
     }
@@ -727,26 +807,27 @@ For example:
   /**
    * Gemini API integration with multi-turn session working memory
    */
-  async callGemini(query, history = [], workspace, memories, newlyLearnedMemory) {
+  async callGemini(query, history = [], workspace, memories, newlyLearnedMemory, wasMemoryUpdated = false) {
     const memoryDirectives = memories.map(m => 
-      `- INVARIANT (${m.type}): "${m.content.title}". Mandated Rule: ${m.content.recommendation}. Past Failure to Avoid: ${m.content.outcome || m.content.problem}`
-    ).join('\n');
+      `- INVARIANT (${m.type.toUpperCase()}): "${m.content.title}". Mandated Rule: ${m.content.recommendation}. Past Failure to Avoid: ${m.content.outcome || m.content.problem}`
+    ).join('\n\n');
 
-    const systemPrompt = `You are DevMemory, a professional senior software engineer and AI pair programmer.
-Current workspace: ${workspace}.
+    const systemPrompt = `You are DevMemory, a professional senior software engineer and AI pair programmer with persistent MongoDB memory.
 
 CRITICAL INSTRUCTIONS:
-1. Multi-turn Session Working Memory:
-You MUST maintain active conversational context across previous prompts in this session. For example, if the user previously asked "Can you optimise it?" and now provides code, you MUST directly optimize that code based on the previous conversation!
-${newlyLearnedMemory ? `2. NEWLY COMMITTED PROJECT MEMORY:
-You just automatically captured and committed this new invariant into persistent MongoDB memory:
+1. READ AND ENFORCE MONGODB LONG-TERM MEMORY:
+Before answering, you MUST read the following project invariants retrieved from MongoDB Atlas and strictly adhere to them. Automatically apply these rules directly into the code and architecture you generate:
+${memoryDirectives || 'No matching invariants found in MongoDB for this query.'}
+
+${newlyLearnedMemory ? `2. ${wasMemoryUpdated ? 'UPDATED' : 'NEWLY COMMITTED'} PROJECT MEMORY:
+You just automatically ${wasMemoryUpdated ? 'updated the existing invariant in' : 'committed this new invariant to'} persistent MongoDB memory:
 - Title: "${newlyLearnedMemory.content.title}"
 - Type: ${newlyLearnedMemory.type}
 - Mandated Rule: "${newlyLearnedMemory.content.recommendation}"
-Clearly acknowledge this new learning, explain why it protects ${workspace}, and confirm that all future code generations will automatically enforce this invariant.` : ''}
-3. Persistent MongoDB Invariants:
-If any project invariants below apply to the user's question, you MUST automatically rectify the code and adhere strictly to them:
-${memoryDirectives || 'No prior failures in memory for this topic yet.'}
+Acknowledge that this rule was ${wasMemoryUpdated ? 'updated in' : 'committed to'} MongoDB memory and explain that future code generations will strictly adhere to it.` : ''}
+
+3. SHORT-TERM WORKING MEMORY:
+Maintain full conversational context across prior prompt turns in this session.
 
 Be helpful, direct, conversational, and provide clean, working, optimized code when requested.`;
 
@@ -777,9 +858,8 @@ Be helpful, direct, conversational, and provide clean, working, optimized code w
     });
 
     const models = [
-      'gemini-3-flash-preview',
-      'gemini-flash-latest',
-      'gemini-3.8-flash'
+      'gemini-flash-lite-latest',
+      'gemini-3.5-flash-lite'
     ];
 
     for (const model of models) {
@@ -789,7 +869,7 @@ Be helpful, direct, conversational, and provide clean, working, optimized code w
         const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(28000),
+          signal: AbortSignal.timeout(22000),
           body: JSON.stringify({
             systemInstruction: {
               parts: [{ text: systemPrompt }]
@@ -807,6 +887,10 @@ Be helpful, direct, conversational, and provide clean, working, optimized code w
 
         if (data.error) {
           console.warn(`[Gemini] Model ${model} returned error:`, data.error.message);
+          // If quota exceeded or service temporarily unavailable, fallback immediately rather than stalling
+          if (data.error.code === 429 || data.error.code === 503) {
+            break;
+          }
         }
       } catch (err) {
         console.warn(`[Gemini] Model ${model} error (${err.message})`);
