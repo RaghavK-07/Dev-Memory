@@ -110,7 +110,6 @@ export default function App() {
       <RecordMemoryModal
         isOpen={recordModalOpen}
         onClose={() => setRecordModalOpen(false)}
-        currentWorkspace={workspace}
         onCreated={handleMemoryCreated}
       />
 
