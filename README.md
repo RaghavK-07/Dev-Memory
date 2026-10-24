@@ -26,30 +26,34 @@ When a developer interacts with the assistant:
 
 ## Getting Started
 
-### 1. Prerequisites
-- Node.js >= 18
-- MongoDB Atlas cluster or local MongoDB instance
+### Quick Start (One Command)
 
-### 2. Environment Configuration
-Copy `.env.example` to `.env`:
-```env
-MONGODB_URI=mongodb+srv://<username>:<password>@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
-DB_NAME=devmemory_db
-PORT=4000
+After cloning the repository:
+
+```bash
+chmod +x start.sh
+./start.sh
 ```
 
-### 3. Installation & Run
-```bash
-# Install root dependencies
-npm install
+This automatically installs dependencies, builds the frontend, and launches the server at `http://localhost:4000`.
 
-# Install client dependencies
+---
+
+### Manual Setup
+
+```bash
+# 1. Install dependencies
+npm install
 npm --prefix client install
 
-# Build client
+# 2. Build frontend bundle
 npm run build
 
-# Start server
+# 3. Configure environment
+cp .env.example .env
+# Edit .env with your MongoDB Atlas URI if needed
+
+# 4. Start the server
 npm start
 ```
 
