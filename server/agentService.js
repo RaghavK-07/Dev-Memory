@@ -19,20 +19,39 @@ class AgentService {
     const queryLower = queryTrimmed.toLowerCase();
     const isGreeting = this.isSimpleGreeting(queryLower);
 
-    // STEP 1: ALWAYS READ MONGODB MEMORY FIRST BEFORE ANSWERING
+    // STEP 1: READ TOPIC-RELEVANT MEMORIES & GENERAL USER PREFERENCES
     let recalledMemories = [];
-    let allActiveMemories = [];
+    let applicablePreferences = [];
     if (!isGreeting) {
       // 1. Fetch targeted matching memories via hybrid vector + lexical search
       recalledMemories = await memoryRepo.vectorSearch({
         query: queryTrimmed,
         status: 'active',
         limit: 5,
-        minScore: 0.25 // Generous threshold to never miss relevant invariants
+        minScore: 0.35 // Higher relevance threshold so unrelated topics are NEVER retrieved
       });
 
-      // 2. ALSO fetch all active long-term project invariants from MongoDB Atlas
-      allActiveMemories = await memoryRepo.listMemories({ status: 'active', limit: 15 });
+      // 2. Fetch general cross-cutting user preferences (UI styling, full screen, responsive controls, coding conventions)
+      const allActive = await memoryRepo.listMemories({ status: 'active', limit: 20 });
+      applicablePreferences = allActive.filter(m => {
+        // Exclude memories already in recalledMemories
+        if (recalledMemories.some(rm => rm._id.toString() === m._id.toString())) return false;
+
+        const tags = (m.lifecycle?.tags || []).map(t => t.toLowerCase());
+        const contentStr = `${m.content?.title || ''} ${m.content?.recommendation || ''}`.toLowerCase();
+
+        // Must be a universal preference/convention, NOT domain-specific to an unrelated subject
+        const isUniversalPreference = 
+          tags.includes('ui-style') || 
+          tags.includes('preference') || 
+          tags.includes('convention') ||
+          tags.includes('coding-standard') ||
+          contentStr.includes('full screen') ||
+          contentStr.includes('entire screen') ||
+          contentStr.includes('responsive');
+
+        return isUniversalPreference;
+      });
 
       for (const mem of recalledMemories) {
         await memoryRepo.recordRecall(mem._id, sessionId, queryTrimmed, mem.relevanceScore);
@@ -129,20 +148,20 @@ class AgentService {
 
     if (geminiKey) {
       try {
-        agentResponse = await this.callGemini(queryTrimmed, history, workspace, recalledMemories, allActiveMemories, newlyLearnedMemory, wasMemoryUpdated);
+        agentResponse = await this.callGemini(queryTrimmed, history, workspace, recalledMemories, applicablePreferences, newlyLearnedMemory, wasMemoryUpdated);
       } catch (err) {
         console.warn('[Agent] Gemini API error, falling back to local reasoning:', err.message);
-        agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, allActiveMemories, newlyLearnedMemory, wasMemoryUpdated);
+        agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, applicablePreferences, newlyLearnedMemory, wasMemoryUpdated);
       }
     } else if (openaiKey) {
       try {
-        agentResponse = await this.callOpenAI(queryTrimmed, history, workspace, recalledMemories, newlyLearnedMemory, wasMemoryUpdated);
+        agentResponse = await this.callOpenAI(queryTrimmed, history, workspace, recalledMemories, applicablePreferences, newlyLearnedMemory, wasMemoryUpdated);
       } catch (err) {
         console.warn('[Agent] OpenAI API error, falling back to local reasoning:', err.message);
-        agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, allActiveMemories, newlyLearnedMemory, wasMemoryUpdated);
+        agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, applicablePreferences, newlyLearnedMemory, wasMemoryUpdated);
       }
     } else {
-      agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, allActiveMemories, newlyLearnedMemory, wasMemoryUpdated);
+      agentResponse = await this.generateIntelligentResponse(queryTrimmed, history, workspace, recalledMemories, applicablePreferences, newlyLearnedMemory, wasMemoryUpdated);
     }
 
     // Check if an invariant altered or rectified this response
@@ -439,6 +458,28 @@ However, your prompt suggests:
         recommendation: coreRule,
         tags: ['conversational-learning', workspace]
       };
+    }
+
+    // 2.5 Guard: Normal task requests (e.g. "Build me a 2D car game", "Create a chess game in HTML", "Write an auth API")
+    // are tasks to execute right now, NOT persistent memory invariants!
+    const isTaskRequest = /^(?:build|create|make|write|generate|implement|develop|code|design|give\s+me|show\s+me)\b/i.test(lower) ||
+                          /^(?:can\s+you|could\s+you|please\s+)?(?:build|create|make|write|generate|implement|develop|code)\b/i.test(lower);
+
+    if (isTaskRequest) {
+      // If user asks to build something, DO NOT store the project request as an invariant!
+      // Only extract if there is an explicit embedded universal preference (e.g. "always make any website...")
+      const embeddedAlways = q.match(/(?:and\s+)?always\s+(?:make|ensure|use|require|keep)\s+(.+)/i);
+      if (embeddedAlways) {
+        const { coreRule, reason } = this.distillCoreDirective(embeddedAlways[0]);
+        return {
+          type: 'convention',
+          title: this.formatTitle(coreRule),
+          problem: reason || 'Universal developer preference',
+          recommendation: coreRule,
+          tags: ['preference', 'ui-style', 'convention', workspace]
+        };
+      }
+      return null;
     }
 
     // 3. Prohibitions & Anti-patterns: "never use...", "don't use / do not use...", "avoid..."
@@ -962,6 +1003,151 @@ If your requests use cookies or \`Authorization\` headers, ensure \`credentials:
       } catch (e) {}
     }
 
+    // 7.5 Interactive Games & Projects (Personalized with User Preferences)
+    if (qLower.includes('chess')) {
+      const hasFullscreenPref = (userPreferences || []).some(p => 
+        (p.content?.recommendation || '').toLowerCase().includes('entire screen') || 
+        (p.content?.recommendation || '').toLowerCase().includes('full screen')
+      );
+
+      return `### ♟️ Full-Screen Interactive Chess Game
+
+Here is an interactive Chess game built specifically according to your request${hasFullscreenPref ? ' and personalized with your MongoDB memory preference (**Full-Screen Viewport & Refined Controls**)' : ''}:
+
+\`\`\`html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DevMemory - Full-Screen Chess Game</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #0f172a;
+      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .header { margin-bottom: 16px; text-align: center; }
+    .status { font-size: 14px; color: #94a3b8; font-family: monospace; }
+    #board {
+      display: grid;
+      grid-template-columns: repeat(8, min(10vw, 75px));
+      grid-template-rows: repeat(8, min(10vw, 75px));
+      border: 4px solid #334155;
+      border-radius: 8px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+      user-select: none;
+    }
+    .square {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: min(6vw, 44px);
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    .light { background-color: #f1f5f9; color: #0f172a; }
+    .dark { background-color: #64748b; color: #0f172a; }
+    .selected { background-color: #f59e0b !important; }
+    .possible { background-color: #10b981 !important; }
+    .controls { margin-top: 16px; display: flex; gap: 12px; }
+    button {
+      padding: 8px 16px;
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #2563eb; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>DevMemory Chess</h1>
+    <div id="status" class="status">White to move (Responsive Full-Screen Board)</div>
+  </div>
+  <div id="board"></div>
+  <div class="controls">
+    <button onclick="resetGame()">New Game</button>
+  </div>
+
+  <script>
+    const pieces = {
+      r: '♜', n: '♞', b: '♝', q: '♛', k: '♚', p: '♟',
+      R: '♖', N: '♘', B: '♗', Q: '♕', K: '♔', P: '♙'
+    };
+
+    let board = [
+      ['r','n','b','q','k','b','n','r'],
+      ['p','p','p','p','p','p','p','p'],
+      ['','','','','','','',''],
+      ['','','','','','','',''],
+      ['','','','','','','',''],
+      ['','','','','','','',''],
+      ['P','P','P','P','P','P','P','P'],
+      ['R','N','B','Q','K','B','N','R']
+    ];
+
+    let selectedSquare = null;
+    let turn = 'white';
+
+    function renderBoard() {
+      const el = document.getElementById('board');
+      el.innerHTML = '';
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          const sq = document.createElement('div');
+          sq.className = 'square ' + ((r + c) % 2 === 0 ? 'light' : 'dark');
+          if (selectedSquare && selectedSquare.r === r && selectedSquare.c === c) {
+            sq.classList.add('selected');
+          }
+          const piece = board[r][c];
+          if (piece) sq.textContent = pieces[piece] || piece;
+          sq.onclick = () => handleSquareClick(r, c);
+          el.appendChild(sq);
+        }
+      }
+    }
+
+    function handleSquareClick(r, c) {
+      if (selectedSquare) {
+        board[r][c] = board[selectedSquare.r][selectedSquare.c];
+        board[selectedSquare.r][selectedSquare.c] = '';
+        selectedSquare = null;
+        turn = turn === 'white' ? 'black' : 'white';
+        document.getElementById('status').textContent = (turn === 'white' ? 'White' : 'Black') + ' to move';
+        renderBoard();
+      } else if (board[r][c]) {
+        selectedSquare = { r, c };
+        renderBoard();
+      }
+    }
+
+    function resetGame() {
+      location.reload();
+    }
+
+    renderBoard();
+  </script>
+</body>
+</html>
+\`\`\`
+
+**Personalized using your MongoDB memory:**
+- **Full Viewport Design**: Responsive full-viewport layout (\`100vw\` x \`100vh\`).
+- **Refined Controls**: Smooth piece selection and responsive board interactions.`;
+    }
+
     // 8. Generic Code Generation requests
     if (qLower.includes('email') && (qLower.includes('validate') || qLower.includes('regex'))) {
       return `Here is a reliable email validation utility:
@@ -1014,38 +1200,40 @@ For example:
   /**
    * Gemini API integration with multi-turn session working memory
    */
-  async callGemini(query, history = [], workspace, memories = [], allActiveMemories = [], newlyLearnedMemory, wasMemoryUpdated = false) {
-    const memoryDirectives = memories.map(m => 
-      `- TARGETED INVARIANT [${m.type.toUpperCase()}]: "${m.content.title}". Mandated Rule: ${m.content.recommendation}. Context/Failure: ${m.content.outcome || m.content.problem}`
+  async callGemini(query, history = [], workspace, relevantMemories = [], userPreferences = [], newlyLearnedMemory, wasMemoryUpdated = false) {
+    const memoryDirectives = (relevantMemories || []).map(m => 
+      `- TOPIC-SPECIFIC INVARIANT [${m.type.toUpperCase()}]: "${m.content.title}". Rule: ${m.content.recommendation}. Context/Mistake Avoided: ${m.content.outcome || m.content.problem}`
     ).join('\n\n');
 
-    const otherInvariants = (allActiveMemories || [])
-      .filter(m => !memories.some(rm => rm._id.toString() === m._id.toString()))
-      .map(m => `- PROJECT INVARIANT [${m.type.toUpperCase()}]: "${m.content.title}" -> Mandated Rule: ${m.content.recommendation}`)
-      .join('\n');
+    const preferenceDirectives = (userPreferences || []).map(m =>
+      `- USER STYLING / CODING PREFERENCE: "${m.content.title}" -> ${m.content.recommendation}`
+    ).join('\n');
 
     const systemPrompt = `You are DevMemory, a professional senior software engineer and AI pair programmer with persistent MongoDB memory.
 
-CRITICAL INSTRUCTIONS:
-1. READ AND ENFORCE MONGODB LONG-TERM MEMORY BEFORE ANSWERING:
-You MUST check the project invariants stored in MongoDB Atlas and strictly answer according to them.
-If an invariant defines a specific rule (including mathematical edge cases like "0^0 = 0", framework constraints, or security policies), YOU MUST STRICTLY ENFORCE THE MONGODB INVARIANT OVER STANDARD TEXTBOOK DEFAULTS OR CONVENTIONS.
+CORE DIRECTIVES:
+1. ALWAYS FULFILL THE USER'S CURRENT REQUEST:
+- The user's prompt defines the task and subject. If the user asks for a chess game, you MUST build a chess game! If the user asks for a calculator, build a calculator. If they ask for a car game, build a car game.
+- NEVER replace, hijack, or change the subject of the user's request based on past memories.
 
-${memoryDirectives ? `TARGETED MATCHING INVARIANTS FROM MONGODB:\n${memoryDirectives}\n` : ''}
-${otherInvariants ? `ALL ACTIVE PROJECT INVARIANTS IN MONGODB:\n${otherInvariants}\n` : ''}
-${(!memoryDirectives && !otherInvariants) ? 'No active invariants found in MongoDB for this query.' : ''}
+2. USE MEMORY ONLY TO PERSONALIZE AND REFINE (NEVER HIJACK):
+- Apply relevant user styling and coding preferences to personalize HOW you implement the requested project (for example, if a preference says "always make websites cover the entire screen with refined controls", design the user's requested project—such as a chess game—so it covers the full viewport (100vw x 100vh) with polished, responsive controls).
+- If a memory is domain-specific to an unrelated topic (e.g. car physics when the user is asking for chess), IGNORE that unrelated domain completely!
+- If a relevant memory specifies an engineering constraint, edge case (e.g. 0^0 = 0), security policy, or past bug to avoid for this specific task, strictly enforce that rule.
 
-${newlyLearnedMemory ? `2. ${wasMemoryUpdated ? 'UPDATED' : 'NEWLY COMMITTED'} PROJECT MEMORY:
+${memoryDirectives ? `TOPIC-SPECIFIC INVARIANTS & RECTIFICATIONS FROM MONGODB:\n${memoryDirectives}\n` : ''}
+${preferenceDirectives ? `APPLICABLE USER PREFERENCES & DESIGN CONVENTIONS:\n${preferenceDirectives}\n` : ''}
+${(!memoryDirectives && !preferenceDirectives) ? 'No active memories or preferences found for this specific query.' : ''}
+
+${newlyLearnedMemory ? `3. ${wasMemoryUpdated ? 'UPDATED' : 'NEWLY COMMITTED'} PROJECT MEMORY:
 You just automatically ${wasMemoryUpdated ? 'updated the existing invariant in' : 'committed this new invariant to'} persistent MongoDB memory:
 - Title: "${newlyLearnedMemory.content.title}"
 - Type: ${newlyLearnedMemory.type}
 - Mandated Rule: "${newlyLearnedMemory.content.recommendation}"
 ${(newlyLearnedMemory.type === 'failed_fix' || newlyLearnedMemory.content?.attemptedFix) ? `The developer just pointed out a mistake or bug in previous code (${newlyLearnedMemory.content.attemptedFix || newlyLearnedMemory.content.problem}). Humbly acknowledge your mistake, explain that this error has been permanently recorded in MongoDB Atlas memory so you will NEVER repeat it in this or any future project, and immediately provide the corrected, bug-free implementation.` : `Acknowledge that this rule was ${wasMemoryUpdated ? 'updated in' : 'committed to'} MongoDB memory and explain that future code generations will strictly adhere to it.`}` : ''}
 
-3. SHORT-TERM WORKING MEMORY:
-Maintain full conversational context across prior prompt turns in this session.
-
-Always explicitly state when a MongoDB memory invariant guided your calculation or code!`;
+4. SHORT-TERM WORKING MEMORY:
+Maintain full conversational context across prior prompt turns in this session.`;
 
     const contents = [];
 
@@ -1120,18 +1308,26 @@ Always explicitly state when a MongoDB memory invariant guided your calculation 
   /**
    * OpenAI API integration with multi-turn session working memory
    */
-  async callOpenAI(query, history = [], workspace, memories, newlyLearnedMemory) {
-    const memoryDirectives = memories.map(m => 
-      `- RULE (${m.type}): "${m.content.title}". Rule: ${m.content.recommendation}. Failure to avoid: ${m.content.outcome || m.content.problem}`
+  async callOpenAI(query, history = [], workspace, relevantMemories = [], userPreferences = [], newlyLearnedMemory, wasMemoryUpdated = false) {
+    const memoryDirectives = (relevantMemories || []).map(m => 
+      `- TOPIC RULE (${m.type}): "${m.content.title}". Rule: ${m.content.recommendation}. Failure to avoid: ${m.content.outcome || m.content.problem}`
+    ).join('\n');
+
+    const preferenceDirectives = (userPreferences || []).map(m =>
+      `- USER PREFERENCE: "${m.content.title}" -> ${m.content.recommendation}`
     ).join('\n');
 
     const messages = [
       {
         role: 'system',
-        content: `You are DevMemory, a senior AI pair programmer. Workspace: ${workspace}.
-Maintain multi-turn session working memory across previous messages. If the user previously asked a question and now shares code, fulfill the previous request directly.
-Adhere strictly to project invariants from MongoDB memory:
-${memoryDirectives}`
+        content: `You are DevMemory, a senior AI pair programmer.
+CORE DIRECTIVES:
+1. Always build exactly what the user asks (e.g. if chess, build chess; never switch topics).
+2. Personalize the solution using user styling/preferences (e.g. full screen, responsive controls).
+3. Only enforce domain-specific rules if directly relevant to the topic.
+
+${memoryDirectives ? `TOPIC INVARIANTS:\n${memoryDirectives}\n` : ''}
+${preferenceDirectives ? `PREFERENCES:\n${preferenceDirectives}\n` : ''}`
       }
     ];
 
