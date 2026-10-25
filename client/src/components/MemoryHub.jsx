@@ -54,10 +54,28 @@ export default function MemoryHub({
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       
+      {/* Top Header Row with small status in the corner */}
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900 tracking-tight">Persistent Invariants</h2>
+          <p className="text-xs text-slate-500">Learned rules, bug fixes, and architectural constraints stored in MongoDB</p>
+        </div>
+
+        {/* Small in corner */}
+        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200/80 text-[11px] font-medium text-emerald-800 shadow-xs flex-shrink-0">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+          </span>
+          <span>MongoDB Atlas: Change Stream Active</span>
+          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 ml-0.5" />
+        </div>
+      </div>
+
       {/* Top Stat Overview */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
             <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Long-Term Memories</span>
@@ -75,19 +93,6 @@ export default function MemoryHub({
           </div>
           <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600">
             <Zap className="w-4 h-4" />
-          </div>
-        </div>
-
-        <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">MongoDB Atlas Real-Time</span>
-            <span className="text-sm font-bold text-emerald-600 mt-1 flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              Change Stream Active
-            </span>
-          </div>
-          <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600">
-            <CheckCircle2 className="w-4 h-4" />
           </div>
         </div>
       </div>

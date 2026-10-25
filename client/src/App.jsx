@@ -75,22 +75,22 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6">
-        {activeTab === 'assistant' && (
+        <div className={activeTab === 'assistant' ? 'block' : 'hidden'}>
           <AgentSession
             onInspectMemory={setInspectingMemoryId}
             onOpenRecordModal={() => setRecordModalOpen(true)}
             onNavigateToMemory={() => setActiveTab('repository')}
           />
-        )}
+        </div>
 
-        {activeTab === 'repository' && (
+        <div className={activeTab === 'repository' ? 'block' : 'hidden'}>
           <MemoryHub
             memories={memories}
             onInspectMemory={setInspectingMemoryId}
             onOpenRecordModal={() => setRecordModalOpen(true)}
             onRefresh={fetchMemories}
           />
-        )}
+        </div>
       </main>
 
       {/* Memory Inspector Modal */}
