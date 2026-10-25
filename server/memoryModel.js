@@ -4,16 +4,18 @@
  * and seamless resilient in-memory fallback to prevent downtime if IP whitelist rotates.
  */
 
+const fs = require('fs');
+const path = require('path');
 const { ObjectId } = require('mongodb');
 const dbManager = require('./db');
 const { getEmbedding, cosineSimilarity, tokenize } = require('./embeddings');
-const { SEED_MEMORIES } = require('./seed');
+
+const STORE_PATH = path.join(__dirname, 'data', 'memories.json');
 
 class MemoryRepository {
   constructor() {
-    // In-memory store initialized with seed memories as high-availability fallback
     this.localStore = [];
-    this.initLocalStore();
+    this.loadLocalStore();
 
     dbManager.on('connection_restored', async () => {
       console.log('[MemoryRepo] Syncing local memories with Atlas...');
@@ -30,12 +32,49 @@ class MemoryRepository {
     });
   }
 
-  async initLocalStore() {
-    for (const data of SEED_MEMORIES) {
-      const doc = await this.buildMemoryDocument(data);
-      doc._id = new ObjectId();
-      this.localStore.push(doc);
+  loadLocalStore() {
+    try {
+      if (fs.existsSync(STORE_PATH)) {
+        const raw = fs.readFileSync(STORE_PATH, 'utf-8');
+        const parsed = JSON.parse(raw);
+        this.localStore = Array.isArray(parsed)
+          ? parsed.map(doc => ({
+              ...doc,
+              _id: new ObjectId(doc._id)
+            }))
+          : [];
+      } else {
+        this.localStore = [];
+      }
+    } catch (err) {
+      console.warn('[MemoryRepo] Failed to load memories from disk:', err.message);
+      this.localStore = [];
     }
+  }
+
+  saveLocalStore() {
+    try {
+      const dir = path.dirname(STORE_PATH);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(STORE_PATH, JSON.stringify(this.localStore, null, 2), 'utf-8');
+    } catch (err) {
+      console.warn('[MemoryRepo] Failed to save memories to disk:', err.message);
+    }
+  }
+
+  async clearAllMemories() {
+    this.localStore = [];
+    this.saveLocalStore();
+    if (this.isLiveAtlas) {
+      try {
+        await this.collection.deleteMany({});
+      } catch (e) {
+        console.warn('[MemoryRepo] Atlas clear warning:', e.message);
+      }
+    }
+    dbManager.emit('memory_change', { operationType: 'delete_all' });
   }
 
   get isLiveAtlas() {
@@ -112,6 +151,7 @@ class MemoryRepository {
 
     // Always update local store
     this.localStore.unshift(doc);
+    this.saveLocalStore();
 
     // If Atlas is connected, insert to Atlas
     if (this.isLiveAtlas) {
@@ -364,6 +404,7 @@ class MemoryRepository {
   async deleteMemory(id, hard = false) {
     const strId = id.toString();
     this.localStore = this.localStore.filter(m => m._id.toString() !== strId);
+    this.saveLocalStore();
 
     if (this.isLiveAtlas) {
       try {
@@ -429,6 +470,7 @@ class MemoryRepository {
     const idx = this.localStore.findIndex(m => m._id.toString() === strId);
     if (idx !== -1) {
       this.localStore[idx] = doc;
+      this.saveLocalStore();
     }
 
     // Update in Atlas

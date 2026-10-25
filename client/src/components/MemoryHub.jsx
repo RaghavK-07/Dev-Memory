@@ -38,6 +38,16 @@ export default function MemoryHub({
     }
   };
 
+  const handleClearAll = async () => {
+    if (!confirm('Are you sure you want to clear all stored memories?')) return;
+    try {
+      await fetch('/api/memories', { method: 'DELETE' });
+      onRefresh();
+    } catch (err) {
+      alert('Error clearing memories: ' + err.message);
+    }
+  };
+
   const getTypeStyle = (type) => {
     switch (type) {
       case 'failed_fix':
@@ -134,6 +144,17 @@ export default function MemoryHub({
             <Plus className="w-3.5 h-3.5" />
             <span>Add Memory</span>
           </button>
+
+          {memories.length > 0 && (
+            <button
+              onClick={handleClearAll}
+              title="Clear all stored memories"
+              className="px-2.5 py-1.5 rounded-md border border-slate-200 text-slate-500 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 text-xs font-medium transition flex items-center gap-1"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Clear All</span>
+            </button>
+          )}
         </div>
 
       </div>

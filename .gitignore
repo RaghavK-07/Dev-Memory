@@ -21,3 +21,7 @@ client/.DS_Store
 # Logs
 *.log
 npm-debug.log*
+
+# Local memory store
+server/data/
+!server/data/.gitkeep

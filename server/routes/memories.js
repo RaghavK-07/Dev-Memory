@@ -87,6 +87,16 @@ router.post('/ephemeral', async (req, res) => {
   }
 });
 
+// Delete all memories
+router.delete('/', async (req, res) => {
+  try {
+    await memoryRepo.clearAllMemories();
+    res.json({ success: true, message: 'All memories cleared' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Delete memory
 router.delete('/:id', async (req, res) => {
   try {
