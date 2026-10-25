@@ -26,11 +26,15 @@ app.use((req, res, next) => {
   next();
 });
 
-// API Routes
+// API Routes (mounted with and without /api prefix for local and serverless/Vercel compatibility)
 app.use('/api/memories', memoriesRoute);
+app.use('/memories', memoriesRoute);
 app.use('/api/agent', agentRoute);
+app.use('/agent', agentRoute);
 app.use('/api/stream', streamRoute);
+app.use('/stream', streamRoute);
 app.use('/api/system', systemRoute);
+app.use('/system', systemRoute);
 
 // Serve static frontend in production
 const clientDistPath = path.join(__dirname, '../client/dist');
@@ -87,7 +91,11 @@ async function start() {
   }
 }
 
-start();
+if (require.main === module) {
+  start();
+}
+
+module.exports = app;
 
 process.on('SIGINT', async () => {
   console.log('\nShutting down DevMemory server gracefully...');

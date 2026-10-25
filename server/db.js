@@ -3,7 +3,8 @@ const EventEmitter = require('events');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
-const uri = process.env.MONGODB_URI;
+const DEFAULT_MONGODB_URI = 'mongodb+srv://raghavkceo_db_user:2dOmM3FUlGyACMFW@cluster0.ecalgvs.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+const uri = process.env.MONGODB_URI || DEFAULT_MONGODB_URI;
 const dbName = process.env.DB_NAME || 'devmemory_db';
 
 class DatabaseManager extends EventEmitter {

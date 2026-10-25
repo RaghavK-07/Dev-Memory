@@ -44,16 +44,36 @@ export default function App() {
     fetchMemories();
     fetchHealth();
 
-    // SSE connection for real-time memory updates
-    const eventSource = new EventSource('/api/stream');
+    // SSE connection for real-time memory updates with resilient serverless polling fallback
+    let eventSource = null;
+    let fallbackPoll = null;
 
-    eventSource.addEventListener('memory_change', () => {
-      fetchMemories();
-      fetchHealth();
-    });
+    try {
+      eventSource = new EventSource('/api/stream');
+
+      eventSource.addEventListener('memory_change', () => {
+        fetchMemories();
+        fetchHealth();
+      });
+
+      eventSource.onerror = () => {
+        // In serverless environments (like Vercel) where SSE streams close after timeouts,
+        // seamlessly switch to background interval polling
+        if (!fallbackPoll) {
+          fallbackPoll = setInterval(() => {
+            fetchMemories();
+          }, 8000);
+        }
+      };
+    } catch (e) {
+      fallbackPoll = setInterval(() => {
+        fetchMemories();
+      }, 8000);
+    }
 
     return () => {
-      eventSource.close();
+      if (eventSource) eventSource.close();
+      if (fallbackPoll) clearInterval(fallbackPoll);
     };
   }, [fetchMemories, fetchHealth]);
 
