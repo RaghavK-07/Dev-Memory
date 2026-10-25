@@ -73,6 +73,7 @@ class DatabaseManager extends EventEmitter {
   }
 
   scheduleReconnect() {
+    if (process.env.VERCEL) return; // Never run background timer loops on Vercel serverless
     if (this.retryTimer) return;
     this.retryTimer = setInterval(async () => {
       if (this.isConnected) {
@@ -99,6 +100,10 @@ class DatabaseManager extends EventEmitter {
         // Still waiting for IP whitelist
       }
     }, 15000);
+
+    if (this.retryTimer && typeof this.retryTimer.unref === 'function') {
+      this.retryTimer.unref();
+    }
   }
 
   async setupIndexes() {
@@ -132,6 +137,7 @@ class DatabaseManager extends EventEmitter {
   }
 
   initChangeStream() {
+    if (process.env.VERCEL) return; // Serverless functions are ephemeral
     if (!this.memoriesCollection) return;
     try {
       this.changeStream = this.memoriesCollection.watch([], { fullDocument: 'updateLookup' });

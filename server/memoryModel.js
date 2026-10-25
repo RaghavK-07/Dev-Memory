@@ -10,7 +10,9 @@ const { ObjectId } = require('mongodb');
 const dbManager = require('./db');
 const { getEmbedding, cosineSimilarity, tokenize } = require('./embeddings');
 
-const STORE_PATH = path.join(__dirname, 'data', 'memories.json');
+const STORE_PATH = process.env.VERCEL
+  ? path.join('/tmp', 'memories.json')
+  : path.join(__dirname, 'data', 'memories.json');
 
 class MemoryRepository {
   constructor() {

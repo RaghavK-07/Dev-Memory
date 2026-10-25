@@ -60,7 +60,13 @@ export default function AgentSession({
         })
       });
 
-      const data = await response.json();
+      const rawText = await response.text();
+      let data;
+      try {
+        data = JSON.parse(rawText);
+      } catch (e) {
+        throw new Error(rawText.slice(0, 140) || `Server error (${response.status})`);
+      }
 
       if (data.success) {
         const agentMsg = {
