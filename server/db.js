@@ -151,6 +151,16 @@ class DatabaseManager extends EventEmitter {
 
   async getHealth() {
     if (!this.isConnected || !this.db) {
+      let total = 0;
+      let active = 0;
+      let superseded = 0;
+      try {
+        const memoryRepo = require('./memoryModel');
+        total = memoryRepo.localStore.length;
+        active = memoryRepo.localStore.filter(m => m.lifecycle?.status === 'active').length;
+        superseded = memoryRepo.localStore.filter(m => m.lifecycle?.status === 'superseded').length;
+      } catch (e) {}
+
       return {
         status: 'fallback_active',
         cluster: 'Resilient Local Storage (Atlas IP Whitelist Required)',
@@ -159,9 +169,9 @@ class DatabaseManager extends EventEmitter {
         atlasError: this.atlasError,
         vectorIndexReady: false,
         counts: {
-          total: 5,
-          active: 5,
-          superseded: 0
+          total,
+          active,
+          superseded
         }
       };
     }

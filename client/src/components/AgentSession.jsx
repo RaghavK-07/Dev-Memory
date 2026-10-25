@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { Send, Check, Copy, ShieldAlert, Sparkles, PlusCircle, Database, Layers, CheckCircle2 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import { ArrowUp, Check, Copy, ShieldAlert, Database } from 'lucide-react';
 
 export default function AgentSession({
   onInspectMemory,
-  onOpenRecordModal,
   onNavigateToMemory
 }) {
   const [inputQuery, setInputQuery] = useState('');
@@ -22,14 +22,6 @@ export default function AgentSession({
   ]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(null);
-
-  // Quick test prompts to verify short-term + long-term memory
-  const quickPrompts = [
-    { label: 'Recall from Long-Term (401 Expiry)', text: 'How should we handle 401 token expiration in our auth middleware?' },
-    { label: 'Recall from Long-Term (Float Math)', text: 'How should I compute total price with discount and taxes for Stripe?' },
-    { label: 'Teach a Rule', text: 'Remember that all database queries must use connection timeouts of 5000ms.' },
-    { label: 'Normal Coding Task', text: 'Write a TypeScript function to parse query parameters into a typed object.' }
-  ];
 
   const handleSend = async (customQuery) => {
     const query = customQuery || inputQuery;
@@ -110,23 +102,6 @@ export default function AgentSession({
   return (
     <div className="flex flex-col h-[740px] bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
       
-      {/* Session Header */}
-      <div className="px-5 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span className="text-xs font-semibold text-slate-800">DevMemory Assistant</span>
-          <span className="text-[11px] font-mono text-slate-500">• Short-Term & Long-Term Memory Active</span>
-        </div>
-
-        <button
-          onClick={onOpenRecordModal}
-          className="text-xs font-medium text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5"
-        >
-          <PlusCircle className="w-3.5 h-3.5" />
-          <span>Add to Memory</span>
-        </button>
-      </div>
-
       {/* Message List */}
       <div className="flex-1 p-5 overflow-y-auto space-y-4 bg-[#fcfdfe]">
         {messages.map((msg) => (
@@ -205,42 +180,76 @@ export default function AgentSession({
                 </div>
               )}
 
-              {/* Message Content with Code Parsing */}
-              <div className="whitespace-pre-wrap font-sans space-y-2">
-                {msg.text.split('```').map((part, idx) => {
-                  if (idx % 2 === 1) {
-                    const lines = part.split('\n');
-                    const lang = lines[0].trim();
-                    const code = lines.slice(1).join('\n');
-                    return (
-                      <div key={idx} className="my-2.5 rounded-lg bg-slate-900 border border-slate-800 overflow-hidden font-mono text-[11px]">
-                        <div className="px-3 py-1 bg-slate-800/80 border-b border-slate-800 text-[10px] text-slate-400 flex items-center justify-between">
-                          <span className="uppercase">{lang || 'code'}</span>
-                          <button
-                            onClick={() => handleCopyCode(code || part, idx)}
-                            className="flex items-center gap-1 hover:text-slate-200 transition"
-                          >
-                            {copiedIndex === idx ? (
-                              <>
-                                <Check className="w-3 h-3 text-emerald-400" />
-                                <span className="text-emerald-400">Copied</span>
-                              </>
-                            ) : (
-                              <>
-                                <Copy className="w-3 h-3" />
-                                <span>Copy</span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                        <pre className="p-3 overflow-x-auto text-emerald-300 leading-relaxed">
-                          {code || part}
-                        </pre>
-                      </div>
-                    );
-                  }
-                  return <span key={idx}>{part}</span>;
-                })}
+              {/* Markdown Preview Content */}
+              <div className="font-sans text-xs leading-relaxed">
+                <ReactMarkdown
+                  components={{
+                    code({ node, inline, className, children, ...props }) {
+                      const match = /language-(\w+)/.exec(className || '');
+                      const codeString = String(children).replace(/\n$/, '');
+
+                      if (!inline && (match || codeString.includes('\n'))) {
+                        const lang = match ? match[1] : '';
+                        return (
+                          <div className="my-2.5 rounded-lg bg-slate-950 border border-slate-800 overflow-hidden font-mono text-[11px] shadow-sm">
+                            <div className="px-3 py-1.5 bg-slate-900 border-b border-slate-800 text-[10px] text-slate-400 flex items-center justify-between font-mono">
+                              <span className="uppercase text-slate-300 font-semibold">{lang || 'code'}</span>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyCode(codeString, codeString)}
+                                className="flex items-center gap-1 hover:text-white transition text-slate-400"
+                              >
+                                {copiedIndex === codeString ? (
+                                  <>
+                                    <Check className="w-3 h-3 text-emerald-400" />
+                                    <span className="text-emerald-400">Copied</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3 h-3" />
+                                    <span>Copy</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                            <pre className="p-3.5 overflow-x-auto text-emerald-300 leading-relaxed font-mono">
+                              <code>{codeString}</code>
+                            </pre>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <code
+                          className={`px-1.5 py-0.5 rounded font-mono text-[11px] ${
+                            msg.sender === 'user'
+                              ? 'bg-slate-800 text-slate-100'
+                              : 'bg-slate-100 text-slate-800 border border-slate-200/60'
+                          }`}
+                          {...props}
+                        >
+                          {children}
+                        </code>
+                      );
+                    },
+                    h1: ({ children }) => <h1 className={`text-sm font-bold mt-3 mb-1.5 ${msg.sender === 'user' ? 'text-white' : 'text-slate-900'}`}>{children}</h1>,
+                    h2: ({ children }) => <h2 className={`text-xs font-bold mt-2.5 mb-1 ${msg.sender === 'user' ? 'text-white' : 'text-slate-900'}`}>{children}</h2>,
+                    h3: ({ children }) => <h3 className={`text-xs font-semibold mt-2 mb-1 ${msg.sender === 'user' ? 'text-white' : 'text-slate-900'}`}>{children}</h3>,
+                    p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+                    ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
+                    ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
+                    li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                    blockquote: ({ children }) => (
+                      <blockquote className={`border-l-2 pl-3 my-2 italic ${msg.sender === 'user' ? 'border-slate-500 text-slate-300' : 'border-slate-300 text-slate-600 bg-slate-50/50 py-1 rounded-r'}`}>
+                        {children}
+                      </blockquote>
+                    ),
+                    strong: ({ children }) => <strong className={`font-semibold ${msg.sender === 'user' ? 'text-white' : 'text-slate-900'}`}>{children}</strong>,
+                    hr: () => <hr className="my-3 border-slate-200" />
+                  }}
+                >
+                  {msg.text}
+                </ReactMarkdown>
               </div>
             </div>
           </div>
@@ -254,58 +263,38 @@ export default function AgentSession({
         )}
       </div>
 
-      {/* Suggested Quick Prompts */}
-      <div className="px-4 py-2 bg-slate-50 border-t border-slate-200 flex items-center gap-2 overflow-x-auto">
-        <span className="text-[10px] font-mono text-slate-400 flex-shrink-0">Try asking:</span>
-        {quickPrompts.map((p, i) => (
-          <button
-            key={i}
-            onClick={() => handleSend(p.text)}
-            disabled={isSubmitting}
-            className="px-2.5 py-1 rounded bg-white hover:bg-slate-100 border border-slate-200 text-[11px] text-slate-700 transition flex-shrink-0 whitespace-nowrap shadow-2xs"
-          >
-            {p.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Input Form with Multiline Prompting */}
-      <div className="p-3.5 bg-white border-t border-slate-200">
+      {/* Input Form with Arrow Send Button */}
+      <div className="p-3 bg-white border-t border-slate-200">
         <form
           onSubmit={(e) => {
             e.preventDefault();
             handleSend();
           }}
-          className="flex flex-col gap-1.5"
+          className="flex items-end gap-2"
         >
-          <div className="flex items-end gap-2">
-            <textarea
-              rows={2}
-              value={inputQuery}
-              onChange={(e) => setInputQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              placeholder={`Ask DevMemory anything, paste code, or state a project rule... (Shift+Enter for newline)`}
-              disabled={isSubmitting}
-              className="flex-1 min-h-[52px] max-h-[160px] resize-y bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-900 focus:bg-white transition leading-relaxed"
-            />
-            <button
-              type="submit"
-              disabled={isSubmitting || !inputQuery.trim()}
-              className="h-[52px] px-4 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-40 flex-shrink-0 shadow-sm"
-            >
-              <Send className="w-3.5 h-3.5" />
-              <span>Send</span>
-            </button>
-          </div>
-          <div className="flex items-center justify-between px-1 text-[10px] text-slate-400">
-            <span>Press <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-600 font-mono">Enter ↵</kbd> to send, <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-600 font-mono">Shift + Enter</kbd> for new line</span>
-            <span>Short-Term Context: <strong className="text-slate-600 font-mono">Active</strong> • Long-Term Store: <strong className="text-emerald-700 font-mono">MongoDB Atlas</strong></span>
-          </div>
+          <textarea
+            rows={2}
+            value={inputQuery}
+            onChange={(e) => setInputQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+            placeholder="Ask DevMemory anything, paste code, or state a project rule..."
+            disabled={isSubmitting}
+            className="flex-1 min-h-[48px] max-h-[160px] resize-y bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-900 focus:bg-white transition leading-relaxed"
+          />
+          <button
+            type="submit"
+            disabled={isSubmitting || !inputQuery.trim()}
+            title="Send"
+            aria-label="Send message"
+            className="h-[48px] w-[48px] rounded-xl bg-slate-900 hover:bg-slate-800 text-white transition flex items-center justify-center disabled:opacity-30 disabled:hover:bg-slate-900 flex-shrink-0 shadow-sm"
+          >
+            <ArrowUp className="w-5 h-5 stroke-[2.2]" />
+          </button>
         </form>
       </div>
 

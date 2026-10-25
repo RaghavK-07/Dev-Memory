@@ -69,8 +69,7 @@ export default function App() {
       <Navbar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        health={health}
-        onOpenRecordModal={() => setRecordModalOpen(true)}
+        memoriesCount={memories.length}
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
